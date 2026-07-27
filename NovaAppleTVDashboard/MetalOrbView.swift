@@ -51,7 +51,6 @@ struct MetalOrbInput: Equatable {
     var gymAlert: Bool
     var speech: VoiceSpeechSnapshot?
     var speechActive: Bool
-    var baseURL: URL
 }
 
 struct MetalOrbView: UIViewRepresentable {
@@ -62,7 +61,6 @@ struct MetalOrbView: UIViewRepresentable {
     var gymAlert: Bool
     var speech: VoiceSpeechSnapshot?
     var speechActive: Bool
-    var baseURL: URL
 
     func makeCoordinator() -> MetalOrbCoordinator {
         MetalOrbCoordinator()
@@ -113,8 +111,7 @@ struct MetalOrbView: UIViewRepresentable {
             listening: listening,
             gymAlert: gymAlert,
             speech: speech,
-            speechActive: speechActive,
-            baseURL: baseURL
+            speechActive: speechActive
         )
     }
 }
@@ -135,16 +132,10 @@ final class MetalOrbRenderer: NSObject, MTKViewDelegate {
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
-    private let textureLoader: MTKTextureLoader
     private let animationModel = OrbAnimationModel()
     private let startTime = CACurrentMediaTime()
     private var previousFrameTime = CACurrentMediaTime()
-    private var mosaicTexture: MTLTexture?
-    private var loadedTextureKey: String?
-    private var textureLoadGeneration = 0
-    var input: MetalOrbInput? {
-        didSet { updateMosaicTextureIfNeeded() }
-    }
+    var input: MetalOrbInput?
 
     init?(device: MTLDevice) {
         guard let commandQueue = device.makeCommandQueue(),
@@ -165,7 +156,6 @@ final class MetalOrbRenderer: NSObject, MTKViewDelegate {
         }
         self.device = device
         self.commandQueue = commandQueue
-        textureLoader = MTKTextureLoader(device: device)
         super.init()
     }
 
@@ -254,7 +244,7 @@ final class MetalOrbRenderer: NSObject, MTKViewDelegate {
                 Float(glass.drift / 100),
                 Float(commands.count),
                 (input.listening || input.speechActive) ? 1 : 0,
-                mosaicTexture == nil ? 0 : 1
+                0
             ),
             background0: SIMD4(
                 Float(input.theme.backgroundEffect.peakIntensity / 100),
@@ -273,7 +263,6 @@ final class MetalOrbRenderer: NSObject, MTKViewDelegate {
         encoder.setRenderPipelineState(pipeline)
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<OrbGPUUniforms>.stride, index: 0)
         encoder.setFragmentBuffer(commandData, offset: 0, index: 1)
-        encoder.setFragmentTexture(mosaicTexture, index: 0)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         encoder.endEncoding()
         commandBuffer.present(drawable)
@@ -610,39 +599,4 @@ final class MetalOrbRenderer: NSObject, MTKViewDelegate {
         )
     }
 
-    private func updateMosaicTextureIfNeeded() {
-        guard let input else { return }
-        let key = input.theme.backgroundEffect.textureURL ?? ""
-        guard key != loadedTextureKey else { return }
-        loadedTextureKey = key
-        textureLoadGeneration += 1
-        guard let value = input.theme.backgroundEffect.textureURL,
-              let url = resolvedTextureURL(value, baseURL: input.baseURL)
-        else {
-            mosaicTexture = nil
-            return
-        }
-        let generation = textureLoadGeneration
-        let loader = textureLoader
-        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-            guard let self, let data else { return }
-            let texture = try? loader.newTexture(
-                data: data,
-                options: [.SRGB: NSNumber(value: false), .generateMipmaps: NSNumber(value: false)]
-            )
-            DispatchQueue.main.async {
-                guard generation == self.textureLoadGeneration else { return }
-                self.mosaicTexture = texture
-            }
-        }.resume()
-    }
-
-    private func resolvedTextureURL(_ value: String, baseURL: URL) -> URL? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
-            return URL(string: trimmed)
-        }
-        return URL(string: trimmed, relativeTo: baseURL)?.absoluteURL
-    }
 }

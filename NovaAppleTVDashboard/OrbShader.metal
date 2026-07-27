@@ -41,12 +41,10 @@ struct OrbGPUUniforms {
     float4 glass0;         // enabled, displacement, stretch, flipVertical
     float4 glass1;         // curve, smoothness, imageBlur, refractionOpacity
     float4 glass2;         // clarity, gloss, shadow, reflection
-    float4 glass3;         // drift, commandCount, glowActive, hasTexture
+    float4 glass3;         // drift, commandCount, glowActive, reserved
     float4 background0;    // peak, falloff, warp, hueSpread
     float4 background1;    // apex, textureScale, uiScale, time
 };
-
-constexpr sampler orbTextureSampler(address::repeat, filter::linear);
 
 vertex OrbVertexOut orbVertex(uint vertexID [[vertex_id]]) {
     float2 positions[3] = {
@@ -58,80 +56,6 @@ vertex OrbVertexOut orbVertex(uint vertexID [[vertex_id]]) {
     out.position = float4(positions[vertexID], 0.0, 1.0);
     out.uv = positions[vertexID] * 0.5 + 0.5;
     return out;
-}
-
-static float hash21(float2 p) {
-    return fract(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
-}
-
-static float3 hsvToRgbOrb(float3 c) {
-    float4 k = float4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
-    float3 p = abs(fract(c.xxx + k.xyz) * 6.0 - k.www);
-    return c.z * mix(k.xxx, clamp(p - k.xxx, 0.0, 1.0), c.y);
-}
-
-static float3 rgbToHsvOrb(float3 c) {
-    float4 k = float4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
-    float4 p = mix(float4(c.bg, k.wz), float4(c.gb, k.xy), step(c.b, c.g));
-    float4 q = mix(float4(p.xyw, c.r), float4(c.r, p.yzx), step(p.x, c.r));
-    float d = q.x - min(q.w, q.y);
-    float e = 1.0e-10;
-    return float3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
-}
-
-static float3 hueShiftOrb(float3 color, float amount) {
-    float3 hsv = rgbToHsvOrb(max(color, float3(0.0)));
-    hsv.x = fract(hsv.x + amount);
-    return hsvToRgbOrb(hsv);
-}
-
-static float fluidPeak(float2 p, float2 center, float radius, float time, float seed, float warp, float falloff) {
-    float2 warped = p;
-    warped.x += sin(p.y * 4.4 + time * 0.18 + seed) * 0.056 * warp;
-    warped.y += cos(p.x * 3.8 - time * 0.15 + seed * 1.7) * 0.048 * warp;
-    float peak = smoothstep(radius, 0.0, length(warped - center));
-    float ridge = 0.5 + 0.5 * sin(p.x * 7.0 + p.y * 5.0 + time * 0.22 + seed);
-    return pow(peak, max(0.4, falloff)) * (0.70 + ridge * 0.45);
-}
-
-static float3 fluidBackground(float2 uv,
-                              constant OrbGPUUniforms &u,
-                              texture2d<float> mosaicTexture) {
-    float aspect = max(1.0, u.viewport.x / max(1.0, u.viewport.y));
-    float time = u.background1.w;
-    if (u.glass3.w > 0.5) {
-        float tileScale = max(0.25, u.background1.y) * max(0.001, u.background1.z);
-        float2 tileUV = fract(float2(uv.x * aspect, uv.y) * tileScale);
-        float3 map = mosaicTexture.sample(orbTextureSampler, tileUV).rgb;
-        float grout = (1.0 - smoothstep(0.004, 0.025, max(map.r, map.g))) *
-            smoothstep(0.965, 0.995, map.b);
-        float2 offset = (map.rg * 2.0 - 1.0) * (1.0 - grout);
-        uv += offset * float2(1.0 / aspect, 1.0) * (0.034 / max(0.001, u.background1.z));
-    }
-    float2 p = (uv - 0.5) * float2(aspect, 1.0);
-    float3 color = u.background.rgb;
-    const float seeds[4] = {0.0, 1.8, 3.4, 5.2};
-    const float radii[4] = {0.48, 0.43, 0.46, 0.38};
-    for (int i = 0; i < 4; ++i) {
-        float seed = seeds[i];
-        float2 center = float2(
-            sin(time * 0.055 + seed) * 0.50 + sin(time * 0.019 + seed * 2.1) * 0.10,
-            cos(time * 0.047 + seed * 1.3) * 0.31 + sin(time * 0.027 + seed) * 0.11
-        );
-        center.x *= aspect;
-        float peak = fluidPeak(p, center, radii[i], time, seed, u.background0.z, u.background0.y);
-        float apex = smoothstep(0.62, 1.0, peak);
-        float pulse = 0.5 + 0.5 * sin(time * 0.12 + seed);
-        float3 tint = mix(u.accent.rgb, u.highlight.rgb, pulse);
-        float hue = (sin(seed * 12.9898 + time * 0.018) * 0.5 + sin(seed * 4.531) * 0.5) *
-            0.11 * u.background0.w;
-        tint = hueShiftOrb(tint, hue);
-        color += tint * peak * (0.22 + pulse * 0.16) * u.background0.x;
-        color += tint * apex * 0.18 * u.background1.x;
-    }
-    float vignette = smoothstep(0.34, 1.16, length(p));
-    color = mix(color, u.background.rgb * 0.76, vignette * 0.42);
-    return saturate(color);
 }
 
 static float4 commandColor(const device OrbGPUCommand &c, int index) {
@@ -329,8 +253,7 @@ static float4 blendCommand(float4 dst, float4 src, int mode) {
 fragment float4 orbFragment(
     OrbVertexOut in [[stage_in]],
     constant OrbGPUUniforms &u [[buffer(0)]],
-    const device OrbGPUCommand *commands [[buffer(1)]],
-    texture2d<float> mosaicTexture [[texture(0)]]
+    const device OrbGPUCommand *commands [[buffer(1)]]
 ) {
     float2 p = (in.uv - 0.5) / 0.48;
     float aa = 1.2 / max(1.0, u.viewport.z);
@@ -352,29 +275,14 @@ fragment float4 orbFragment(
     float glassEnabled = u.glass0.x;
     float4 result = orb;
     if (glassEnabled > 0.5 && radius <= 1.0) {
-        float stretch = max(0.05, 1.0 + u.glass0.z);
-        float2 lensP = p / stretch;
-        if (u.glass0.w > 0.5) lensP.y *= -1.0;
-        float q = 0.15 + 0.84 * u.glass1.x;
-        float s = q * min(1.0, radius);
-        float magnitude = saturate(s / sqrt(max(0.000001, 1.0 - s * s)));
-        float rimWindow = smoothstep(0.0, 0.24, 1.0 - radius);
-        float2 refracted = lensP + normalize(p + 0.00001) * magnitude * rimWindow * u.glass0.y * 0.11;
-        float2 screenUV = 0.5 + refracted * 0.16;
-        float blur = u.glass1.z * 0.004 + u.glass1.y * 0.002;
-        float3 backdrop = float3(0.0);
-        const float2 taps[5] = {
-            float2(0.0), float2(1.0, 0.0), float2(-1.0, 0.0),
-            float2(0.0, 1.0), float2(0.0, -1.0)
-        };
-        for (int i = 0; i < 5; ++i) {
-            backdrop += fluidBackground(screenUV + taps[i] * blur, u, mosaicTexture);
-        }
-        backdrop /= 5.0;
+        // The tvOS orb is fixed relative to the dashboard, so synthesizing a
+        // separately moving copy of the background cannot behave like genuine
+        // refraction. Keep the glass surface treatment over a stable theme tint.
+        float3 glassBase = u.background.rgb;
         float clarityMask = smoothstep(u.glass2.x * 0.55, 0.45 + u.glass2.x * 0.45, radius);
         float orbOpacity = mix(1.0, 0.65, u.glass2.x) * clarityMask;
         float3 orbStraight = orb.a > 0.0001 ? orb.rgb / orb.a : float3(0.0);
-        float3 glassColor = mix(backdrop, orbStraight, saturate(orb.a * orbOpacity));
+        float3 glassColor = mix(glassBase, orbStraight, saturate(orb.a * orbOpacity));
 
         float reflectionBand = smoothstep(0.25, 0.95, radius) *
             saturate(0.5 + 0.5 * sin(atan2(p.y, p.x) * 2.0 - 0.9 + sin(time * 0.18) * u.glass3.x));

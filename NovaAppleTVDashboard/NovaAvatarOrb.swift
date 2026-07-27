@@ -40,8 +40,7 @@ struct NovaAvatarOrb: View {
                             listening: listening,
                             gymAlert: gymAlert,
                             speech: speech.snapshot,
-                            speechActive: speechActive,
-                            baseURL: store.activeBaseURL ?? AppConfig.dashboardBaseURL
+                            speechActive: speechActive
                         )
                     }
 
