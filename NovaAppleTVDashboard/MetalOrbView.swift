@@ -355,16 +355,20 @@ final class MetalOrbRenderer: NSObject, MTKViewDelegate {
                     turbulence?.softness?.resolved(settings: settings, fallback: 0) ?? 0,
                     0, 100
                 )
+                let normalizedSoftness = softness / 100
+                let strandWidth = ring.width / sqrt(fibers)
                 command.geometry0 = SIMD4(
-                    Float(ring.radius), Float(ring.width), Float(fibers), Float(chaos)
+                    Float(ring.radius), Float(strandWidth), Float(fibers), Float(chaos)
                 )
                 command.geometry1 = SIMD4(
                     Float(weave), Float(speed), Float(pulse), Float(softness)
                 )
-                command.geometry2.w = Float(base.glow + softness / 100 * 0.035)
-                command.color0 = gpuColor(
+                command.geometry2.w = Float(base.glow * (0.4 + 1.6 * normalizedSoftness))
+                var ringColor = gpuColor(
                     resolveOrbColor(ring.color, palette: palette, alertPulse: alertPulse)
                 )
+                ringColor.w *= Float(1 - 0.35 * normalizedSoftness)
+                command.color0 = ringColor
                 result.append(command)
 
             case .arc(let arc):

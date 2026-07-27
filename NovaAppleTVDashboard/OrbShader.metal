@@ -196,8 +196,11 @@ static float4 shadeCommand(const device OrbGPUCommand &c, float2 p, float aa, fl
     float distance = 1000.0;
     float4 color = c.color0;
     float fillAlpha = 0.0;
+    float sourceWidth = aa * 2.0;
+    bool solidShape = false;
 
     if (kind == 0) { // disc / ellipse
+        solidShape = true;
         float2 center = c.geometry0.xy;
         float radius = max(0.0001, c.geometry0.z);
         float scaleY = max(0.01, c.geometry0.w);
@@ -217,6 +220,7 @@ static float4 shadeCommand(const device OrbGPUCommand &c, float2 p, float aa, fl
     } else if (kind == 1) { // ring, optionally turbulent
         float radius = c.geometry0.x;
         float width = c.geometry0.y;
+        sourceWidth = width;
         int fibers = clamp(int(c.geometry0.z + 0.5), 1, 12);
         float chaos = saturate(c.geometry0.w / 100.0);
         float weave = saturate(c.geometry1.x / 100.0);
@@ -238,6 +242,7 @@ static float4 shadeCommand(const device OrbGPUCommand &c, float2 p, float aa, fl
     } else if (kind == 2) { // arc
         float radius = c.geometry0.x;
         float width = c.geometry0.y;
+        sourceWidth = width;
         float from = c.geometry0.z;
         float to = c.geometry0.w;
         float angle = atan2(p.y, p.x) / (M_PI_F * 2.0);
@@ -254,11 +259,14 @@ static float4 shadeCommand(const device OrbGPUCommand &c, float2 p, float aa, fl
         if (c.geometry1.x > 0.5) at = 1.0 - at;
         color = gradientColor(c, at, int(c.geometry3.x + 0.5));
     } else if (kind == 3) { // line
+        sourceWidth = c.geometry1.x;
         distance = sdSegment(p, c.geometry0.xy, c.geometry0.zw) - c.geometry1.x * 0.5;
         color = c.color0;
     } else if (kind == 4) { // polygon/polyline
         int count = clamp(int(c.geometry0.x + 0.5), 3, 16);
         bool filled = c.geometry0.y > 0.5;
+        solidShape = filled;
+        sourceWidth = c.geometry0.z;
         bool closed = c.geometry0.w > 0.5;
         bool inside = false;
         float edgeDistance = 1000.0;
@@ -278,8 +286,18 @@ static float4 shadeCommand(const device OrbGPUCommand &c, float2 p, float aa, fl
 
     float core = 1.0 - smoothstep(-aa, aa, distance);
     float glowRadius = max(0.0, c.geometry2.w);
+    // Canvas shadowBlur is a normalized Gaussian convolution: a hairline with
+    // a wide blur has a faint halo because the source energy is spread across
+    // that radius. An unnormalised exponential tail makes dozens of additive
+    // arc-field layers saturate into a solid disc (especially the Halo module).
+    // Approximate the canvas result analytically from the signed-distance field,
+    // including the source-width normalization for stroked primitives.
+    float glowSigma = max(aa, glowRadius * 0.5);
+    float glowEnergy = solidShape
+        ? 0.5
+        : saturate(sourceWidth / max(aa, glowSigma * 2.506628));
     float glow = glowRadius > 0.0001 && distance > 0
-        ? exp(-distance / max(0.0001, glowRadius)) * 0.75
+        ? exp(-0.5 * pow(distance / glowSigma, 2.0)) * glowEnergy
         : 0.0;
     fillAlpha = max(core, glow);
     if (c.meta.w > 0.5 && length(p) > 1.0) fillAlpha = 0.0;
