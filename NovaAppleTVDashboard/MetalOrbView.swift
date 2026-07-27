@@ -94,9 +94,10 @@ struct MetalOrbView: UIViewRepresentable {
     func updateUIView(_ uiView: UIView, context: Context) {
         context.coordinator.renderer?.input = currentInput
         guard let view = uiView as? MTKView else { return }
-        // The dashboard enlarges the speaking orb in the compositor. Double the
-        // backing resolution during that window so the centred result stays crisp.
-        let scale = max(1, UIScreen.main.scale) * (speechActive ? 2 : 1)
+        // The view itself enlarges during speech. Retain the device scale rather
+        // than doubling it again: that second multiplier quadrupled fragment
+        // work precisely when the animated speech envelope was busiest.
+        let scale = max(1, UIScreen.main.scale)
         let desired = CGSize(width: view.bounds.width * scale, height: view.bounds.height * scale)
         if desired.width > 0, desired.height > 0, view.drawableSize != desired {
             view.drawableSize = desired
@@ -129,6 +130,11 @@ final class MetalOrbCoordinator {
 
 final class MetalOrbRenderer: NSObject, MTKViewDelegate {
     private static let targetDPR: Float = 2
+    // Fragment cost is command-count × pixel-count. Twenty-eight evenly sampled
+    // field primitives preserve the visual band while reducing Halo's 80-command
+    // swarm to roughly one third of its dashboard density on Apple TV hardware.
+    private static let maxFieldCommandsPerLayer = 28
+    private static let maxTurbulenceFibers = 3
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
@@ -279,7 +285,11 @@ final class MetalOrbRenderer: NSObject, MTKViewDelegate {
         now: TimeInterval,
         dt: Double
     ) -> [OrbGPUCommand] {
-        _ = animationModel.beginFrame(module: module, now: now)
+        _ = animationModel.beginFrame(
+            module: module,
+            now: now,
+            fieldSegmentLimit: Self.maxFieldCommandsPerLayer
+        )
         var result: [OrbGPUCommand] = []
         result.reserveCapacity(96)
         for (layerIndex, layer) in module.layers.enumerated() {
@@ -322,7 +332,7 @@ final class MetalOrbRenderer: NSObject, MTKViewDelegate {
                 let turbulence = ring.turbulence
                 let fibers = clamped(
                     turbulence?.fibers?.resolved(settings: settings, fallback: 1) ?? 1,
-                    1, 12
+                    1, Double(Self.maxTurbulenceFibers)
                 )
                 let chaos = clamped(
                     turbulence?.chaos?.resolved(settings: settings, fallback: 0) ?? 0,
@@ -382,7 +392,11 @@ final class MetalOrbRenderer: NSObject, MTKViewDelegate {
                     now: now,
                     dt: dt
                 )
-                for segment in segments where segment.colorIndex < field.colors.count {
+                let commandCount = min(segments.count, Self.maxFieldCommandsPerLayer)
+                for commandIndex in 0..<commandCount {
+                    let segmentIndex = commandIndex * segments.count / max(1, commandCount)
+                    let segment = segments[segmentIndex]
+                    guard segment.colorIndex < field.colors.count else { continue }
                     let ref = field.colors[segment.colorIndex]
                     let color = resolveOrbColor(ref, palette: palette, alertPulse: alertPulse)
                     result.append(arcCommand(
@@ -436,10 +450,13 @@ final class MetalOrbRenderer: NSObject, MTKViewDelegate {
                     now: now,
                     dt: dt
                 )
-                for segment in segments
-                    where segment.trackIndex < field.tracks.count &&
-                        segment.colorIndex < field.colors.count
-                {
+                let commandCount = min(segments.count, Self.maxFieldCommandsPerLayer)
+                for commandIndex in 0..<commandCount {
+                    let segmentIndex = commandIndex * segments.count / max(1, commandCount)
+                    let segment = segments[segmentIndex]
+                    guard segment.trackIndex < field.tracks.count,
+                          segment.colorIndex < field.colors.count
+                    else { continue }
                     let track = field.tracks[segment.trackIndex]
                     let t0 = segment.position - segment.length / 2
                     let t1 = segment.position + segment.length / 2
@@ -499,7 +516,16 @@ final class MetalOrbRenderer: NSObject, MTKViewDelegate {
         var command = baseCommand(kind: 2, base: base, opacity: opacity)
         command.geometry0 = SIMD4(Float(radius), Float(width), Float(from), Float(to))
         command.geometry1.x = reverse ? 1 : 0
-        command.geometry2.w = Float(base.glow)
+        let startRadians = from * .pi * 2
+        let endRadians = to * .pi * 2
+        command.geometry2 = SIMD4(
+            Float(cos(startRadians) * radius),
+            Float(sin(startRadians) * radius),
+            0,
+            Float(base.glow)
+        )
+        command.geometry3.y = Float(cos(endRadians) * radius)
+        command.geometry3.z = Float(sin(endRadians) * radius)
         applyStops(stops, to: &command, palette: palette, alertPulse: alertPulse)
         if let resolvedOverride {
             let value = gpuColor(resolvedOverride)

@@ -115,7 +115,13 @@ static float2 commandPoint(const device OrbGPUCommand &c, int index) {
     return (index & 1) == 0 ? packed.xy : packed.zw;
 }
 
-static float4 shadeCommand(const device OrbGPUCommand &c, float2 p, float aa, float time) {
+static float4 shadeCommand(const device OrbGPUCommand &c,
+                           float2 p,
+                           float radial,
+                           float polarRadians,
+                           float polarTurns,
+                           float aa,
+                           float time) {
     int kind = int(c.meta.x + 0.5);
     float distance = 1000.0;
     float4 color = c.color0;
@@ -135,7 +141,6 @@ static float4 shadeCommand(const device OrbGPUCommand &c, float2 p, float aa, fl
         q = float2(q.x * cs - q.y * sn, q.x * sn + q.y * cs);
         q.y /= scaleY;
         distance = length(q) - radius;
-        float2 fromCenter = c.geometry1.yz;
         float fromRadius = c.geometry1.w;
         float2 toCenter = c.geometry2.xy;
         float toRadius = max(0.0001, c.geometry2.z);
@@ -151,13 +156,11 @@ static float4 shadeCommand(const device OrbGPUCommand &c, float2 p, float aa, fl
         float speed = saturate(c.geometry1.y / 100.0);
         float breathe = saturate(c.geometry1.z / 100.0);
         float softness = saturate(c.geometry1.w / 100.0);
-        float angle = atan2(p.y, p.x);
-        float radial = length(p);
         distance = 1000.0;
         for (int fiber = 0; fiber < fibers; ++fiber) {
             float phase = float(fiber) * (0.7 + weave * 2.7);
-            float noise = sin(angle * (5.0 + chaos * 13.0) + time * (0.25 + speed * 5.0) + phase);
-            noise += 0.5 * sin(angle * (17.0 + weave * 19.0) - time * (0.4 + speed * 7.0) + phase * 1.9);
+            float noise = sin(polarRadians * (5.0 + chaos * 13.0) + time * (0.25 + speed * 5.0) + phase);
+            noise += 0.5 * sin(polarRadians * (17.0 + weave * 19.0) - time * (0.4 + speed * 7.0) + phase * 1.9);
             float pulse = sin(time * (0.8 + speed * 3.0) + phase) * breathe * 0.045;
             float strandRadius = radius + pulse + noise * chaos * 0.075;
             distance = min(distance, abs(radial - strandRadius) - width * (0.5 + softness * 0.32));
@@ -169,15 +172,13 @@ static float4 shadeCommand(const device OrbGPUCommand &c, float2 p, float aa, fl
         sourceWidth = width;
         float from = c.geometry0.z;
         float to = c.geometry0.w;
-        float angle = atan2(p.y, p.x) / (M_PI_F * 2.0);
-        if (angle < 0) angle += 1.0;
         float sweep = to - from;
         if (sweep < 0) sweep += ceil(-sweep);
-        float rel = angle - fract(from);
+        float rel = polarTurns - fract(from);
         if (rel < 0) rel += 1.0;
-        float radialDistance = abs(length(p) - radius) - width * 0.5;
-        float2 start = float2(cos(from * M_PI_F * 2.0), sin(from * M_PI_F * 2.0)) * radius;
-        float2 end = float2(cos(to * M_PI_F * 2.0), sin(to * M_PI_F * 2.0)) * radius;
+        float radialDistance = abs(radial - radius) - width * 0.5;
+        float2 start = c.geometry2.xy;
+        float2 end = c.geometry3.yz;
         distance = rel <= sweep ? radialDistance : min(length(p - start), length(p - end)) - width * 0.5;
         float at = saturate(rel / max(0.0001, sweep));
         if (c.geometry1.x > 0.5) at = 1.0 - at;
@@ -220,11 +221,18 @@ static float4 shadeCommand(const device OrbGPUCommand &c, float2 p, float aa, fl
     float glowEnergy = solidShape
         ? 0.5
         : saturate(sourceWidth / max(aa, glowSigma * 2.506628));
-    float glow = glowRadius > 0.0001 && distance > 0
-        ? exp(-0.5 * pow(distance / glowSigma, 2.0)) * glowEnergy
-        : 0.0;
+    float glow = 0.0;
+    if (glowRadius > 0.0001 && distance > 0.0) {
+        float normalizedDistance = distance / glowSigma;
+        // Beyond 3.25 sigma the contribution is below 0.6%; skipping the
+        // exponential for those fragments is visually invisible and avoids
+        // the most expensive operation for the majority of field commands.
+        if (normalizedDistance < 3.25) {
+            glow = exp(-0.5 * normalizedDistance * normalizedDistance) * glowEnergy;
+        }
+    }
     fillAlpha = max(core, glow);
-    if (c.meta.w > 0.5 && length(p) > 1.0) fillAlpha = 0.0;
+    if (c.meta.w > 0.5 && radial > 1.0) fillAlpha = 0.0;
     color.a *= fillAlpha * c.meta.z;
     color.rgb *= color.a;
     return color;
@@ -258,14 +266,25 @@ fragment float4 orbFragment(
     float2 p = (in.uv - 0.5) / 0.48;
     float aa = 1.2 / max(1.0, u.viewport.z);
     float time = u.background1.w;
+    float radius = length(p);
+    float polarRadians = atan2(p.y, p.x);
+    float polarTurns = polarRadians / (M_PI_F * 2.0);
+    if (polarTurns < 0.0) polarTurns += 1.0;
     float4 orb = float4(0.0);
     int commandCount = min(512, int(u.glass3.y + 0.5));
     for (int index = 0; index < commandCount; ++index) {
-        float4 src = shadeCommand(commands[index], p, aa, time);
+        float4 src = shadeCommand(
+            commands[index],
+            p,
+            radius,
+            polarRadians,
+            polarTurns,
+            aa,
+            time
+        );
         orb = blendCommand(orb, src, int(commands[index].meta.y + 0.5));
     }
 
-    float radius = length(p);
     // The dashboard canvas is circular at the compositor, so even deliberately
     // large layer glows stop at the orb rim. Preserve that contract here while
     // still allowing the separate glass shadow and voice halo below to extend.
@@ -285,7 +304,7 @@ fragment float4 orbFragment(
         float3 glassColor = mix(glassBase, orbStraight, saturate(orb.a * orbOpacity));
 
         float reflectionBand = smoothstep(0.25, 0.95, radius) *
-            saturate(0.5 + 0.5 * sin(atan2(p.y, p.x) * 2.0 - 0.9 + sin(time * 0.18) * u.glass3.x));
+            saturate(0.5 + 0.5 * sin(polarRadians * 2.0 - 0.9 + sin(time * 0.18) * u.glass3.x));
         glassColor += float3(0.78, 0.86, 1.0) * reflectionBand * u.glass2.w * 0.22;
         float gloss = pow(saturate(1.0 - length((p - float2(-0.34, -0.42)) * float2(0.72, 1.35))), 4.0);
         glassColor += gloss * u.glass2.y * 0.38;

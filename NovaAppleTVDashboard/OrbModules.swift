@@ -816,29 +816,38 @@ final class OrbAnimationModel: ObservableObject {
     private var arcStates: [Int: [OrbArcSegment]] = [:]
     private var lineStates: [Int: [OrbLineSegment]] = [:]
     private var lastTime: TimeInterval?
+    private var fieldSegmentLimit: Int?
 
     /// Ensure state matches the module and advance the frame clock.
     /// Returns the clamped dt for this frame.
-    func beginFrame(module: OrbModule, now: TimeInterval) -> Double {
-        if self.module != module {
-            rebuild(module: module)
+    func beginFrame(module: OrbModule, now: TimeInterval, fieldSegmentLimit: Int? = nil) -> Double {
+        let normalizedLimit = fieldSegmentLimit.map { max(1, $0) }
+        if self.module != module || self.fieldSegmentLimit != normalizedLimit {
+            rebuild(module: module, fieldSegmentLimit: normalizedLimit)
         }
         let dt = min(0.05, max(0.001, now - (lastTime ?? now)))
         lastTime = now
         return dt
     }
 
-    private func rebuild(module: OrbModule) {
+    private func rebuild(module: OrbModule, fieldSegmentLimit: Int?) {
         self.module = module
+        self.fieldSegmentLimit = fieldSegmentLimit
         arcStates = [:]
         lineStates = [:]
         lastTime = nil
         for (index, layer) in module.layers.enumerated() {
             switch layer {
             case .arcField(let field):
-                arcStates[index] = Self.createArcSegments(field)
+                arcStates[index] = Self.createArcSegments(
+                    field,
+                    count: min(field.count, fieldSegmentLimit ?? field.count)
+                )
             case .lineField(let field):
-                lineStates[index] = Self.createLineSegments(field)
+                lineStates[index] = Self.createLineSegments(
+                    field,
+                    count: min(field.count, fieldSegmentLimit ?? field.count)
+                )
             default:
                 break
             }
@@ -848,10 +857,10 @@ final class OrbAnimationModel: ObservableObject {
     /// Initial arcField population: radii spread (or ring-snapped) across the
     /// band with jitter, zeroed motion targets, and an immediate resample so
     /// the first frame samples real targets — the web convention.
-    private static func createArcSegments(_ layer: OrbArcFieldLayer) -> [OrbArcSegment] {
+    private static func createArcSegments(_ layer: OrbArcFieldLayer, count: Int) -> [OrbArcSegment] {
         let ringCount = max(1, layer.ringCount)
-        return (0..<layer.count).map { index in
-            let spreadT = layer.count > 1 ? Double(index) / Double(layer.count - 1) : 0.5
+        return (0..<count).map { index in
+            let spreadT = count > 1 ? Double(index) / Double(count - 1) : 0.5
             let ringT = ringCount > 1 ? Double(index % ringCount) / Double(ringCount - 1) : 0.5
             let t = layer.ringsDistribution ? ringT : spreadT
             let jitter = (Double.random(in: 0...1) - 0.5) * layer.ringJitter
@@ -873,8 +882,8 @@ final class OrbAnimationModel: ObservableObject {
     /// Initial lineField population: round-robin track assignment (two
     /// tracks split the swarm in half), random starting positions so
     /// co-track segments are desynced, zeroed motion targets.
-    private static func createLineSegments(_ layer: OrbLineFieldLayer) -> [OrbLineSegment] {
-        (0..<layer.count).map { index in
+    private static func createLineSegments(_ layer: OrbLineFieldLayer, count: Int) -> [OrbLineSegment] {
+        (0..<count).map { index in
             OrbLineSegment(
                 trackIndex: layer.tracks.isEmpty ? 0 : index % layer.tracks.count,
                 colorIndex: assignColorIndex(index, colorCount: layer.colors.count, random: layer.randomColors),
