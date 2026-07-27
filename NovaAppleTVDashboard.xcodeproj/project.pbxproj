@@ -1,0 +1,436 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 60;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		01A1B0010000000000000001 /* NovaAppleTVDashboardApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0010000000000000001 /* NovaAppleTVDashboardApp.swift */; };
+		01A1B0020000000000000001 /* TVDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0020000000000000001 /* TVDashboardView.swift */; };
+		01A1B0030000000000000001 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0030000000000000001 /* Models.swift */; };
+		01A1B0040000000000000001 /* DashboardStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0040000000000000001 /* DashboardStore.swift */; };
+		01A1B0050000000000000001 /* Spectrum.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0050000000000000001 /* Spectrum.swift */; };
+		01A1B0060000000000000001 /* FluidBackgroundView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0060000000000000001 /* FluidBackgroundView.swift */; };
+		01A1B0070000000000000001 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0070000000000000001 /* AppConfig.swift */; };
+		01A1B0080000000000000002 /* OrbModules.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0080000000000000002 /* OrbModules.swift */; };
+		01A1B0080000000000000003 /* CameraFeedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0080000000000000003 /* CameraFeedView.swift */; };
+		01A1B0200000000000000001 /* DashboardComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0200000000000000001 /* DashboardComponents.swift */; };
+		01A1B0210000000000000001 /* DashboardFocus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0210000000000000001 /* DashboardFocus.swift */; };
+		01A1B0220000000000000001 /* Formatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0220000000000000001 /* Formatting.swift */; };
+		01A1B0230000000000000001 /* NovaAvatarOrb.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0230000000000000001 /* NovaAvatarOrb.swift */; };
+		01A1B0240000000000000001 /* LightingControlsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0240000000000000001 /* LightingControlsView.swift */; };
+		01A1B0250000000000000001 /* ClimateControlsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0250000000000000001 /* ClimateControlsView.swift */; };
+		01A1B0260000000000000001 /* OutsideView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0260000000000000001 /* OutsideView.swift */; };
+		01A1B0270000000000000001 /* ParkedControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0270000000000000001 /* ParkedControls.swift */; };
+		01A1B0280000000000000001 /* OrbBuiltins.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0280000000000000001 /* OrbBuiltins.swift */; };
+		01A1B0290000000000000001 /* VoiceSpeechStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0290000000000000001 /* VoiceSpeechStore.swift */; };
+		01A1B0300000000000000001 /* MetalOrbView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0300000000000000001 /* MetalOrbView.swift */; };
+		01A1B0310000000000000001 /* OrbShader.metal in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0310000000000000001 /* OrbShader.metal */; };
+		01A1B0320000000000000001 /* ParitySelfTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0320000000000000001 /* ParitySelfTests.swift */; };
+		01A1B0090000000000000001 /* FluidBackgroundShader.metal in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0090000000000000001 /* FluidBackgroundShader.metal */; };
+		01A1B0100000000000000001 /* Rajdhani-Medium.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 01A1A0100000000000000001 /* Rajdhani-Medium.ttf */; };
+		01A1B0110000000000000001 /* Rajdhani-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 01A1A0110000000000000001 /* Rajdhani-SemiBold.ttf */; };
+		01A1B0120000000000000001 /* Rajdhani-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 01A1A0120000000000000001 /* Rajdhani-Bold.ttf */; };
+		01A1B0130000000000000001 /* ShareTechMono-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 01A1A0130000000000000001 /* ShareTechMono-Regular.ttf */; };
+		01A1B0140000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 01A1A0140000000000000001 /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		01A1A0010000000000000001 /* NovaAppleTVDashboardApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NovaAppleTVDashboardApp.swift; sourceTree = "<group>"; };
+		01A1A0020000000000000001 /* TVDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVDashboardView.swift; sourceTree = "<group>"; };
+		01A1A0030000000000000001 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		01A1A0040000000000000001 /* DashboardStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardStore.swift; sourceTree = "<group>"; };
+		01A1A0050000000000000001 /* Spectrum.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Spectrum.swift; sourceTree = "<group>"; };
+		01A1A0060000000000000001 /* FluidBackgroundView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FluidBackgroundView.swift; sourceTree = "<group>"; };
+		01A1A0070000000000000001 /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
+		01A1A0080000000000000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		01A1A0080000000000000002 /* OrbModules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbModules.swift; sourceTree = "<group>"; };
+		01A1A0080000000000000003 /* CameraFeedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraFeedView.swift; sourceTree = "<group>"; };
+		01A1A0200000000000000001 /* DashboardComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardComponents.swift; sourceTree = "<group>"; };
+		01A1A0210000000000000001 /* DashboardFocus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardFocus.swift; sourceTree = "<group>"; };
+		01A1A0220000000000000001 /* Formatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Formatting.swift; sourceTree = "<group>"; };
+		01A1A0230000000000000001 /* NovaAvatarOrb.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NovaAvatarOrb.swift; sourceTree = "<group>"; };
+		01A1A0240000000000000001 /* LightingControlsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LightingControlsView.swift; sourceTree = "<group>"; };
+		01A1A0250000000000000001 /* ClimateControlsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClimateControlsView.swift; sourceTree = "<group>"; };
+		01A1A0260000000000000001 /* OutsideView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutsideView.swift; sourceTree = "<group>"; };
+		01A1A0270000000000000001 /* ParkedControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParkedControls.swift; sourceTree = "<group>"; };
+		01A1A0280000000000000001 /* OrbBuiltins.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbBuiltins.swift; sourceTree = "<group>"; };
+		01A1A0290000000000000001 /* VoiceSpeechStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceSpeechStore.swift; sourceTree = "<group>"; };
+		01A1A0300000000000000001 /* MetalOrbView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalOrbView.swift; sourceTree = "<group>"; };
+		01A1A0310000000000000001 /* OrbShader.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = OrbShader.metal; sourceTree = "<group>"; };
+		01A1A0320000000000000001 /* ParitySelfTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParitySelfTests.swift; sourceTree = "<group>"; };
+		01A1A0090000000000000001 /* FluidBackgroundShader.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = FluidBackgroundShader.metal; sourceTree = "<group>"; };
+		01A1A0100000000000000001 /* Rajdhani-Medium.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Rajdhani-Medium.ttf"; sourceTree = "<group>"; };
+		01A1A0110000000000000001 /* Rajdhani-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Rajdhani-SemiBold.ttf"; sourceTree = "<group>"; };
+		01A1A0120000000000000001 /* Rajdhani-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Rajdhani-Bold.ttf"; sourceTree = "<group>"; };
+		01A1A0130000000000000001 /* ShareTechMono-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "ShareTechMono-Regular.ttf"; sourceTree = "<group>"; };
+		01A1A0140000000000000001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		01A1C0010000000000000001 /* NovaAppleTVDashboard.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NovaAppleTVDashboard.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		01A1D0010000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		01A1E0010000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				01A1E0020000000000000001 /* NovaAppleTVDashboard */,
+				01A1E0030000000000000001 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		01A1E0020000000000000001 /* NovaAppleTVDashboard */ = {
+			isa = PBXGroup;
+			children = (
+				01A1A0070000000000000001 /* AppConfig.swift */,
+				01A1A0140000000000000001 /* Assets.xcassets */,
+				01A1A0040000000000000001 /* DashboardStore.swift */,
+				01A1A0090000000000000001 /* FluidBackgroundShader.metal */,
+				01A1A0060000000000000001 /* FluidBackgroundView.swift */,
+				01A1E0040000000000000001 /* Fonts */,
+				01A1A0080000000000000001 /* Info.plist */,
+				01A1A0030000000000000001 /* Models.swift */,
+				01A1A0010000000000000001 /* NovaAppleTVDashboardApp.swift */,
+				01A1A0080000000000000002 /* OrbModules.swift */,
+				01A1A0280000000000000001 /* OrbBuiltins.swift */,
+				01A1A0300000000000000001 /* MetalOrbView.swift */,
+				01A1A0310000000000000001 /* OrbShader.metal */,
+				01A1A0290000000000000001 /* VoiceSpeechStore.swift */,
+				01A1A0320000000000000001 /* ParitySelfTests.swift */,
+				01A1A0080000000000000003 /* CameraFeedView.swift */,
+				01A1A0200000000000000001 /* DashboardComponents.swift */,
+				01A1A0210000000000000001 /* DashboardFocus.swift */,
+				01A1A0220000000000000001 /* Formatting.swift */,
+				01A1A0230000000000000001 /* NovaAvatarOrb.swift */,
+				01A1A0240000000000000001 /* LightingControlsView.swift */,
+				01A1A0250000000000000001 /* ClimateControlsView.swift */,
+				01A1A0260000000000000001 /* OutsideView.swift */,
+				01A1A0270000000000000001 /* ParkedControls.swift */,
+				01A1A0050000000000000001 /* Spectrum.swift */,
+				01A1A0020000000000000001 /* TVDashboardView.swift */,
+			);
+			path = NovaAppleTVDashboard;
+			sourceTree = "<group>";
+		};
+		01A1E0030000000000000001 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				01A1C0010000000000000001 /* NovaAppleTVDashboard.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		01A1E0040000000000000001 /* Fonts */ = {
+			isa = PBXGroup;
+			children = (
+				01A1A0100000000000000001 /* Rajdhani-Medium.ttf */,
+				01A1A0110000000000000001 /* Rajdhani-SemiBold.ttf */,
+				01A1A0120000000000000001 /* Rajdhani-Bold.ttf */,
+				01A1A0130000000000000001 /* ShareTechMono-Regular.ttf */,
+			);
+			path = Fonts;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		01A1F0010000000000000001 /* NovaAppleTVDashboard */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 01A1F0040000000000000001 /* Build configuration list for PBXNativeTarget "NovaAppleTVDashboard" */;
+			buildPhases = (
+				01A1D0030000000000000001 /* Sources */,
+				01A1D0010000000000000001 /* Frameworks */,
+				01A1D0020000000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = NovaAppleTVDashboard;
+			productName = NovaAppleTVDashboard;
+			productReference = 01A1C0010000000000000001 /* NovaAppleTVDashboard.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		01A1F0020000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2630;
+				LastUpgradeCheck = 2630;
+				TargetAttributes = {
+					01A1F0010000000000000001 = {
+						CreatedOnToolsVersion = 26.3;
+					};
+				};
+			};
+			buildConfigurationList = 01A1F0030000000000000001 /* Build configuration list for PBXProject "NovaAppleTVDashboard" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 01A1E0010000000000000001;
+			productRefGroup = 01A1E0030000000000000001 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				01A1F0010000000000000001 /* NovaAppleTVDashboard */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		01A1D0020000000000000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				01A1B0140000000000000001 /* Assets.xcassets in Resources */,
+				01A1B0100000000000000001 /* Rajdhani-Medium.ttf in Resources */,
+				01A1B0110000000000000001 /* Rajdhani-SemiBold.ttf in Resources */,
+				01A1B0120000000000000001 /* Rajdhani-Bold.ttf in Resources */,
+				01A1B0130000000000000001 /* ShareTechMono-Regular.ttf in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		01A1D0030000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				01A1B0070000000000000001 /* AppConfig.swift in Sources */,
+				01A1B0040000000000000001 /* DashboardStore.swift in Sources */,
+				01A1B0090000000000000001 /* FluidBackgroundShader.metal in Sources */,
+				01A1B0060000000000000001 /* FluidBackgroundView.swift in Sources */,
+				01A1B0030000000000000001 /* Models.swift in Sources */,
+				01A1B0010000000000000001 /* NovaAppleTVDashboardApp.swift in Sources */,
+				01A1B0080000000000000002 /* OrbModules.swift in Sources */,
+				01A1B0280000000000000001 /* OrbBuiltins.swift in Sources */,
+				01A1B0300000000000000001 /* MetalOrbView.swift in Sources */,
+				01A1B0310000000000000001 /* OrbShader.metal in Sources */,
+				01A1B0290000000000000001 /* VoiceSpeechStore.swift in Sources */,
+				01A1B0320000000000000001 /* ParitySelfTests.swift in Sources */,
+				01A1B0080000000000000003 /* CameraFeedView.swift in Sources */,
+				01A1B0200000000000000001 /* DashboardComponents.swift in Sources */,
+				01A1B0210000000000000001 /* DashboardFocus.swift in Sources */,
+				01A1B0220000000000000001 /* Formatting.swift in Sources */,
+				01A1B0230000000000000001 /* NovaAvatarOrb.swift in Sources */,
+				01A1B0240000000000000001 /* LightingControlsView.swift in Sources */,
+				01A1B0250000000000000001 /* ClimateControlsView.swift in Sources */,
+				01A1B0260000000000000001 /* OutsideView.swift in Sources */,
+				01A1B0270000000000000001 /* ParkedControls.swift in Sources */,
+				01A1B0050000000000000001 /* Spectrum.swift in Sources */,
+				01A1B0020000000000000001 /* TVDashboardView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		01A1F0050000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = appletvos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				TVOS_DEPLOYMENT_TARGET = 18.0;
+			};
+			name = Debug;
+		};
+		01A1F0060000000000000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = appletvos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				TVOS_DEPLOYMENT_TARGET = 18.0;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		01A1F0070000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = NovaAppleTVDashboard/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = nz.co.skull.NovaAppleTVDashboard;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "appletvos appletvsimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 3;
+				TVOS_DEPLOYMENT_TARGET = 18.0;
+			};
+			name = Debug;
+		};
+		01A1F0080000000000000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = NovaAppleTVDashboard/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = nz.co.skull.NovaAppleTVDashboard;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "appletvos appletvsimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 3;
+				TVOS_DEPLOYMENT_TARGET = 18.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		01A1F0030000000000000001 /* Build configuration list for PBXProject "NovaAppleTVDashboard" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				01A1F0050000000000000001 /* Debug */,
+				01A1F0060000000000000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		01A1F0040000000000000001 /* Build configuration list for PBXNativeTarget "NovaAppleTVDashboard" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				01A1F0070000000000000001 /* Debug */,
+				01A1F0080000000000000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 01A1F0020000000000000001 /* Project object */;
+}

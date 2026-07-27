@@ -1,0 +1,11 @@
+.DS_Store
+DerivedData/
+DerivedDataSim/
+*.xcuserstate
+xcuserdata/
+gui-build.log
+
+# Household-specific signing and endpoint overrides stay outside the repo.
+Local.xcconfig
+Config.local.xcconfig
+deploy.local.ps1
