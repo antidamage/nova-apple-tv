@@ -11,6 +11,7 @@ enum ParitySelfTests {
         testThemeDecoding()
         testOrbContract()
         testSpeechEnvelope()
+        testRootBackExitGate()
     }
 
     private static func testClockFormatting() {
@@ -125,6 +126,18 @@ enum ParitySelfTests {
             safetyDeadline: 10
         )
         assert(fallback.envelope(at: 0.3, alertPulsePeriod: 1.2) > 0)
+    }
+
+    private static func testRootBackExitGate() {
+        var gate = RootBackExitGate(interval: 1)
+        assert(!gate.register(at: 10))
+        assert(gate.register(at: 10.8))
+        assert(!gate.register(at: 11))
+
+        gate.reset()
+        assert(!gate.register(at: 20))
+        assert(!gate.register(at: 21.1))
+        assert(gate.register(at: 21.9))
     }
 }
 #endif

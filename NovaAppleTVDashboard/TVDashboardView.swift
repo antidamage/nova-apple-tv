@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import SwiftUI
 
@@ -29,6 +30,7 @@ struct TVDashboardView: View {
     @State private var editCancelSerial = 0
     @State private var remoteMoveGate = RemoteMoveGate()
     @State private var stickyGate = StickyBoundaryGate()
+    @State private var rootBackExitGate = RootBackExitGate()
     // Transient horizontal "tug" applied to the control band when a sticky
     // boundary resists a swipe, so holding against it reads as resistance rather
     // than a dead remote.
@@ -165,6 +167,7 @@ struct TVDashboardView: View {
     /// the graph. Both paths run through `RemoteMoveGate` for debounce/gating.
     private func handleMove(_ direction: MoveCommandDirection) {
         guard let remoteDirection = RemoteDirection(direction) else { return }
+        rootBackExitGate.reset()
 
         if let editingFocus {
             guard remoteMoveGate.accept(direction: remoteDirection, focus: editingFocus, isEditing: true) else {
@@ -187,20 +190,22 @@ struct TVDashboardView: View {
     }
 
     /// Menu/Back: dismisses the camera cover, then cancels editing, then collapses
-    /// the open child/zone, then steps focus one level shallower. Each press
-    /// consumes exactly one level so edge exits always take a deliberate second
-    /// gesture.
+    /// the open child/zone, then steps focus one level shallower. At the root,
+    /// two presses within a short window exit for remotes without a dedicated
+    /// exit button.
     private func handleExit() {
         exitCommandSerial &+= 1
 
         // Menu/Back while the full-screen camera is up dismisses just the
         // player — it must not fall through and collapse the underlying zone.
         if store.fullScreenCameraID != nil {
+            rootBackExitGate.reset()
             store.fullScreenCameraID = nil
             return
         }
 
         if cancelEditing() {
+            rootBackExitGate.reset()
             return
         }
 
@@ -209,26 +214,39 @@ struct TVDashboardView: View {
         // gated by the hierarchy stickiness. Clear any half-charged swipe so the
         // button never inherits resistance.
         stickyGate.reset()
-        collapseOneLevel()
+        if collapseOneLevel() {
+            rootBackExitGate.reset()
+            return
+        }
+
+        let now = ProcessInfo.processInfo.systemUptime
+        guard rootBackExitGate.register(at: now) else {
+            debugInteractionLog("exit armed at root")
+            return
+        }
+
+        debugInteractionLog("exit confirmed by double Back at root")
+        exit(EXIT_SUCCESS)
     }
 
     /// Steps exactly one level shallower: collapse an open child, else an open
     /// zone, else return to the owning title, else settle on the first zone.
     /// Shared by the Menu/Back button (instant) and the sticky left-edge swipe
     /// (once it has overcome the hierarchy resistance).
-    private func collapseOneLevel() {
+    @discardableResult
+    private func collapseOneLevel() -> Bool {
         if let expandedChildZoneID {
             self.expandedChildZoneID = nil
             focus = .child(expandedChildZoneID)
             debugInteractionLog("exit collapsed child \(expandedChildZoneID)")
-            return
+            return true
         }
 
         if let expandedTopZoneID {
             self.expandedTopZoneID = nil
             focus = .section(expandedTopZoneID)
             debugInteractionLog("exit collapsed section \(expandedTopZoneID)")
-            return
+            return true
         }
 
         if let state = store.state {
@@ -236,12 +254,14 @@ struct TVDashboardView: View {
                let owner = ownerTitle(for: current, state: state) {
                 focus = owner
                 debugInteractionLog("exit returned \(current) -> \(owner)")
-                return
+                return true
             }
 
             focus = state.primaryZones.first.map { .section($0.id) }
-            debugInteractionLog("exit consumed at root")
         }
+
+        debugInteractionLog("exit reached root")
+        return false
     }
 
     /// Advances focus through the transposed graph. up/down move between siblings

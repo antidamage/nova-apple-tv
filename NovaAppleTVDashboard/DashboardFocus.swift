@@ -87,6 +87,34 @@ struct DashboardEditCancel: Equatable {
     let focus: DashboardFocus
 }
 
+/// Requires two root-level Back presses close together before allowing the app
+/// to exit. A monotonic timestamp keeps wall-clock changes from affecting the
+/// gesture, and any navigation/collapse resets the pending first press.
+struct RootBackExitGate {
+    private let interval: TimeInterval
+    private var firstPressAt: TimeInterval?
+
+    init(interval: TimeInterval = 1.0) {
+        self.interval = interval
+    }
+
+    mutating func register(at now: TimeInterval) -> Bool {
+        if let firstPressAt,
+           now >= firstPressAt,
+           now - firstPressAt <= interval {
+            self.firstPressAt = nil
+            return true
+        }
+
+        firstPressAt = now
+        return false
+    }
+
+    mutating func reset() {
+        firstPressAt = nil
+    }
+}
+
 /// Tracks an in-flight navigation gesture so a control must be "left" for a
 /// short dwell before focus detaches — see `RemoteMoveGate`.
 private struct PendingRemoteNavigation {
