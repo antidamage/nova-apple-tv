@@ -6,6 +6,8 @@ import UIKit
 struct FluidBackgroundView: UIViewRepresentable {
     let theme: DashboardTheme
     var baseURL: URL = AppConfig.dashboardBaseURL
+    var blobScale: Float = 1
+    var blobSoftness: Float = 1
 
     func makeCoordinator() -> FluidBackgroundCoordinator {
         FluidBackgroundCoordinator()
@@ -22,6 +24,8 @@ struct FluidBackgroundView: UIViewRepresentable {
 
         renderer.baseURL = baseURL
         renderer.theme = theme
+        renderer.blobScale = blobScale
+        renderer.blobSoftness = blobSoftness
         let view = MTKView(frame: .zero, device: device)
         view.backgroundColor = UIColor(theme.background.color)
         view.clearColor = theme.clearColor
@@ -38,6 +42,8 @@ struct FluidBackgroundView: UIViewRepresentable {
     func updateUIView(_ uiView: UIView, context: Context) {
         context.coordinator.renderer?.baseURL = baseURL
         context.coordinator.renderer?.theme = theme
+        context.coordinator.renderer?.blobScale = blobScale
+        context.coordinator.renderer?.blobSoftness = blobSoftness
         if let view = uiView as? MTKView {
             view.backgroundColor = UIColor(theme.background.color)
             view.clearColor = theme.clearColor
@@ -70,6 +76,9 @@ struct FluidBackgroundUniforms {
     var textureScale: Float
     var uiScaleMultiplier: Float
     var hasMosaicTexture: Float
+    var blobScale: Float
+    var blobSoftness: Float
+    var padding: Float = 0
 }
 
 final class FluidBackgroundRenderer: NSObject, MTKViewDelegate {
@@ -84,6 +93,8 @@ final class FluidBackgroundRenderer: NSObject, MTKViewDelegate {
     private let startTime = CACurrentMediaTime()
     var theme = DashboardTheme.default
     var baseURL: URL = AppConfig.dashboardBaseURL
+    var blobScale: Float = 1
+    var blobSoftness: Float = 1
 
     private var mosaicTexture: MTLTexture?
     private var loadedTextureKey: String?
@@ -143,7 +154,9 @@ final class FluidBackgroundRenderer: NSObject, MTKViewDelegate {
             apexGlow: Float(theme.backgroundEffect.apexGlow / 100),
             textureScale: Float(theme.backgroundEffect.textureScale / 100),
             uiScaleMultiplier: uiScaleMultiplier,
-            hasMosaicTexture: mosaicTexture == nil ? 0 : 1
+            hasMosaicTexture: mosaicTexture == nil ? 0 : 1,
+            blobScale: blobScale,
+            blobSoftness: blobSoftness
         )
 
         encoder.setRenderPipelineState(pipelineState)
