@@ -268,6 +268,8 @@ struct PhonoscopeRenderParticle {
     var glow: Float
     var primitive: Float
     var material: Float
+    var trailDirection: SIMD3<Float>
+    var trailLength: Float
 }
 
 struct PhonoscopeDiagnostics: Equatable, Sendable {

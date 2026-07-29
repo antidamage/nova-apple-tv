@@ -5,6 +5,7 @@ struct PhonoscopeParticle {
     float4 positionSize;
     float4 color;
     float4 meta;
+    float4 trail;
 };
 
 struct PhonoscopeUniforms {
@@ -60,11 +61,37 @@ vertex PhonoscopeVertexOut phonoscope_vertex(
         p.xy = (p.xy - center) / extent;
     }
     float aspect = max(0.01, uniforms.viewport.x / max(1.0, uniforms.viewport.y));
-    float2 offset = corners[vertexID] * particle.positionSize.w;
-    offset.x /= aspect;
 
     PhonoscopeVertexOut out;
-    out.position = float4(p.xy + offset, 0, 1);
+    if (particle.meta.y > 4.5 && particle.trail.w > 0.0) {
+        float2 direction = particle.trail.xy;
+        if (is3D <= 0.5) {
+            float2 extent = max(float2(0.0001), (uniforms.boundsMax.xy - uniforms.boundsMin.xy) * 0.5);
+            direction /= extent;
+        }
+        float2 screenDirection = float2(direction.x * aspect, direction.y);
+        float directionLength = length(screenDirection);
+        screenDirection = directionLength > 0.00001
+            ? screenDirection / directionLength
+            : float2(1.0, 0.0);
+        float2 clipDirection = float2(screenDirection.x / aspect, screenDirection.y);
+        float2 clipNormal = float2(-screenDirection.y / aspect, screenDirection.x);
+        float progress = (corners[vertexID].x + 1.0) * 0.5;
+        float sourceRadius = particle.positionSize.w;
+        float2 trailHead = p.xy - clipDirection * sourceRadius * 0.9;
+        float2 trailTail = trailHead - clipDirection * sourceRadius * particle.trail.w;
+        float2 trailCenter = mix(trailTail, trailHead, progress);
+        float halfWidth = sourceRadius * progress;
+        out.position = float4(
+            trailCenter + clipNormal * corners[vertexID].y * halfWidth,
+            0,
+            1
+        );
+    } else {
+        float2 offset = corners[vertexID] * particle.positionSize.w;
+        offset.x /= aspect;
+        out.position = float4(p.xy + offset, 0, 1);
+    }
     out.local = corners[vertexID];
     out.color = particle.color;
     out.glow = particle.meta.x;
@@ -76,25 +103,33 @@ vertex PhonoscopeVertexOut phonoscope_vertex(
 fragment float4 phonoscope_fragment(PhonoscopeVertexOut in [[stage_in]]) {
     float radius = length(in.local);
     float core;
+    float halo;
     if (in.primitive < 0.5) {
         if (radius > 1.0) discard_fragment();
         core = smoothstep(1.0, 0.08, radius);
+        halo = exp(-radius * radius * 3.2) * in.glow;
     } else if (in.primitive < 1.5) {
         if (radius > 1.0) discard_fragment();
         core = smoothstep(0.16, 0.02, abs(radius - 0.70));
+        halo = exp(-radius * radius * 3.2) * in.glow;
     } else if (in.primitive < 2.5) {
         core = smoothstep(1.0, 0.78, max(abs(in.local.x), abs(in.local.y)));
+        halo = exp(-radius * radius * 3.2) * in.glow;
     } else if (in.primitive < 3.5) {
         float edge = 1.0 - abs(in.local.x);
         if (in.local.y < -1.0 || in.local.y > edge * 2.0 - 1.0) discard_fragment();
         core = smoothstep(0.08, 0.22, min(in.local.y + 1.0, edge * 2.0 - 1.0 - in.local.y));
+        halo = exp(-radius * radius * 3.2) * in.glow;
     } else if (in.primitive < 4.5) {
         float edge = max(abs(in.local.x), abs(in.local.y));
         core = smoothstep(0.15, 0.015, abs(edge - 0.82));
+        halo = exp(-radius * radius * 3.2) * in.glow;
     } else {
-        core = smoothstep(1.0, 0.1, abs(in.local.y)) * smoothstep(1.0, -0.8, in.local.x);
+        float progress = clamp((in.local.x + 1.0) * 0.5, 0.0, 1.0);
+        float brightness = pow(progress, 1.45);
+        core = smoothstep(1.0, 0.08, abs(in.local.y)) * brightness;
+        halo = exp(-in.local.y * in.local.y * 3.2) * in.glow * brightness;
     }
-    float halo = exp(-radius * radius * 3.2) * in.glow;
     float lighting = 1.0;
     if (in.material > 0.5 && in.material < 1.5 && radius <= 1.0) {
         float z = sqrt(max(0.0, 1.0 - radius * radius));
