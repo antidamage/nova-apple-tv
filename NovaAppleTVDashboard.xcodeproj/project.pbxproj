@@ -29,6 +29,13 @@
 		01A1B0300000000000000001 /* MetalOrbView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0300000000000000001 /* MetalOrbView.swift */; };
 		01A1B0310000000000000001 /* OrbShader.metal in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0310000000000000001 /* OrbShader.metal */; };
 		01A1B0320000000000000001 /* ParitySelfTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0320000000000000001 /* ParitySelfTests.swift */; };
+		01A1B0330000000000000001 /* PhonoscopeModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0330000000000000001 /* PhonoscopeModels.swift */; };
+		01A1B0340000000000000001 /* PhonoscopeExpression.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0340000000000000001 /* PhonoscopeExpression.swift */; };
+		01A1B0350000000000000001 /* PhonoscopeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0350000000000000001 /* PhonoscopeStore.swift */; };
+		01A1B0360000000000000001 /* PhonoscopeSimulation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0360000000000000001 /* PhonoscopeSimulation.swift */; };
+		01A1B0370000000000000001 /* MetalPhonoscopeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0370000000000000001 /* MetalPhonoscopeView.swift */; };
+		01A1B0380000000000000001 /* PhonoscopeShader.metal in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0380000000000000001 /* PhonoscopeShader.metal */; };
+		01A1B0390000000000000001 /* PhonoscopeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0390000000000000001 /* PhonoscopeView.swift */; };
 		01A1B0090000000000000001 /* FluidBackgroundShader.metal in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0090000000000000001 /* FluidBackgroundShader.metal */; };
 		01A1B0100000000000000001 /* Rajdhani-Medium.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 01A1A0100000000000000001 /* Rajdhani-Medium.ttf */; };
 		01A1B0110000000000000001 /* Rajdhani-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 01A1A0110000000000000001 /* Rajdhani-SemiBold.ttf */; };
@@ -61,6 +68,13 @@
 		01A1A0300000000000000001 /* MetalOrbView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalOrbView.swift; sourceTree = "<group>"; };
 		01A1A0310000000000000001 /* OrbShader.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = OrbShader.metal; sourceTree = "<group>"; };
 		01A1A0320000000000000001 /* ParitySelfTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParitySelfTests.swift; sourceTree = "<group>"; };
+		01A1A0330000000000000001 /* PhonoscopeModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonoscopeModels.swift; sourceTree = "<group>"; };
+		01A1A0340000000000000001 /* PhonoscopeExpression.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonoscopeExpression.swift; sourceTree = "<group>"; };
+		01A1A0350000000000000001 /* PhonoscopeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonoscopeStore.swift; sourceTree = "<group>"; };
+		01A1A0360000000000000001 /* PhonoscopeSimulation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonoscopeSimulation.swift; sourceTree = "<group>"; };
+		01A1A0370000000000000001 /* MetalPhonoscopeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalPhonoscopeView.swift; sourceTree = "<group>"; };
+		01A1A0380000000000000001 /* PhonoscopeShader.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = PhonoscopeShader.metal; sourceTree = "<group>"; };
+		01A1A0390000000000000001 /* PhonoscopeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonoscopeView.swift; sourceTree = "<group>"; };
 		01A1A0090000000000000001 /* FluidBackgroundShader.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = FluidBackgroundShader.metal; sourceTree = "<group>"; };
 		01A1A0100000000000000001 /* Rajdhani-Medium.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Rajdhani-Medium.ttf"; sourceTree = "<group>"; };
 		01A1A0110000000000000001 /* Rajdhani-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Rajdhani-SemiBold.ttf"; sourceTree = "<group>"; };
@@ -107,6 +121,13 @@
 				01A1A0310000000000000001 /* OrbShader.metal */,
 				01A1A0290000000000000001 /* VoiceSpeechStore.swift */,
 				01A1A0320000000000000001 /* ParitySelfTests.swift */,
+				01A1A0330000000000000001 /* PhonoscopeModels.swift */,
+				01A1A0340000000000000001 /* PhonoscopeExpression.swift */,
+				01A1A0350000000000000001 /* PhonoscopeStore.swift */,
+				01A1A0360000000000000001 /* PhonoscopeSimulation.swift */,
+				01A1A0370000000000000001 /* MetalPhonoscopeView.swift */,
+				01A1A0380000000000000001 /* PhonoscopeShader.metal */,
+				01A1A0390000000000000001 /* PhonoscopeView.swift */,
 				01A1A0080000000000000003 /* CameraFeedView.swift */,
 				01A1A0200000000000000001 /* DashboardComponents.swift */,
 				01A1A0210000000000000001 /* DashboardFocus.swift */,
@@ -226,6 +247,13 @@
 				01A1B0310000000000000001 /* OrbShader.metal in Sources */,
 				01A1B0290000000000000001 /* VoiceSpeechStore.swift in Sources */,
 				01A1B0320000000000000001 /* ParitySelfTests.swift in Sources */,
+				01A1B0330000000000000001 /* PhonoscopeModels.swift in Sources */,
+				01A1B0340000000000000001 /* PhonoscopeExpression.swift in Sources */,
+				01A1B0350000000000000001 /* PhonoscopeStore.swift in Sources */,
+				01A1B0360000000000000001 /* PhonoscopeSimulation.swift in Sources */,
+				01A1B0370000000000000001 /* MetalPhonoscopeView.swift in Sources */,
+				01A1B0380000000000000001 /* PhonoscopeShader.metal in Sources */,
+				01A1B0390000000000000001 /* PhonoscopeView.swift in Sources */,
 				01A1B0080000000000000003 /* CameraFeedView.swift in Sources */,
 				01A1B0200000000000000001 /* DashboardComponents.swift in Sources */,
 				01A1B0210000000000000001 /* DashboardFocus.swift in Sources */,

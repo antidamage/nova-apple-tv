@@ -20,6 +20,9 @@ struct FluidBackgroundUniforms {
     float textureScale;
     float uiScaleMultiplier;
     float hasMosaicTexture;
+    float blobScale;
+    float blobSoftness;
+    float padding;
 };
 
 constexpr sampler mosaicSampler(address::clamp_to_edge, filter::linear);
@@ -128,10 +131,12 @@ fragment float4 fluidBackgroundFragment(VertexOut in [[stage_in]],
     float2 p = (uv - 0.5) * float2(aspect, 1.0);
     float time = uniforms.time;
     float peakIntensity = clamp(uniforms.peakIntensity, 0.4, 2.6);
-    float falloffPower = clamp(uniforms.falloffPower, 0.8, 3.2);
+    float falloffPower = clamp(uniforms.falloffPower, 0.8, 3.2)
+        * clamp(uniforms.blobSoftness, 0.25, 1.5);
     float warpAmplitude = clamp(uniforms.warpAmplitude, 0.4, 2.2);
     float hueSpread = clamp(uniforms.hueSpread, 0.0, 1.0);
     float apexGlow = clamp(uniforms.apexGlow, 0.0, 2.4);
+    float blobScale = clamp(uniforms.blobScale, 0.5, 4.0);
 
     float3 color = uniforms.background.rgb;
     float seeds[4] = {0.0, 1.8, 3.4, 5.2};
@@ -145,7 +150,7 @@ fragment float4 fluidBackgroundFragment(VertexOut in [[stage_in]],
         );
         center.x *= aspect;
 
-        float peak = peakField(p, center, radii[i], time, seed, warpAmplitude, falloffPower);
+        float peak = peakField(p, center, radii[i] * blobScale, time, seed, warpAmplitude, falloffPower);
         float apex = smoothstep(0.62, 1.0, peak);
         float pulse = 0.5 + 0.5 * sin(time * 0.12 + seed);
         float3 tint = mix(uniforms.accent.rgb, uniforms.highlight.rgb, pulse);

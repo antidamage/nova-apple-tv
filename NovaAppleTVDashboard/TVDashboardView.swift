@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import SwiftUI
+import UIKit
 
 // The dashboard root and the ribbon scaffolding around it.
 //
@@ -20,6 +21,8 @@ struct TVDashboardView: View {
     @EnvironmentObject private var store: DashboardStore
     @EnvironmentObject private var activity: NovaActivityStore
     @EnvironmentObject private var speech: VoiceSpeechStore
+    @EnvironmentObject private var phonoscope: PhonoscopeStore
+    @Environment(\.scenePhase) private var scenePhase
     @FocusState private var focus: DashboardFocus?
     @State private var expandedTopZoneID: String?
     @State private var expandedChildZoneID: String?
@@ -31,23 +34,26 @@ struct TVDashboardView: View {
     @State private var remoteMoveGate = RemoteMoveGate()
     @State private var stickyGate = StickyBoundaryGate()
     @State private var rootBackExitGate = RootBackExitGate()
+    @State private var exitCommandShield = ExitCommandShield()
     // Transient horizontal "tug" applied to the control band when a sticky
     // boundary resists a swipe, so holding against it reads as resistance rather
     // than a dead remote.
     @State private var resistOffset: CGFloat = 0
     @State private var resistToken = 0
     @State private var exitCommandSerial = 0
+    @State private var isPhonoscopePresented = false
 
     var body: some View {
         ZStack {
-            FluidBackgroundView(theme: store.theme, baseURL: store.activeBaseURL ?? AppConfig.dashboardBaseURL)
-                .ignoresSafeArea()
+            Group {
+                FluidBackgroundView(theme: store.theme, baseURL: store.activeBaseURL ?? AppConfig.dashboardBaseURL)
+                    .ignoresSafeArea()
 
-            // Horizontal control band: the whole dashboard flows left->right
-            // inside a fixed-height band (a fraction of the screen height, from
-            // the shared theme's `layout.tvHeightFraction`). The band is
-            // vertically centred, leaving ambient fluid background above/below.
-            GeometryReader { geo in
+                // Horizontal control band: the whole dashboard flows left->right
+                // inside a fixed-height band (a fraction of the screen height, from
+                // the shared theme's `layout.tvHeightFraction`). The band is
+                // vertically centred, leaving ambient fluid background above/below.
+                GeometryReader { geo in
                 let bandHeight = geo.size.height * store.layoutHeightFraction
 
                 HStack(alignment: .center, spacing: 18) {
@@ -79,7 +85,8 @@ struct TVDashboardView: View {
                                         expandedChildZoneID: $expandedChildZoneID,
                                         editingFocus: $editingFocus,
                                         editMove: editMove,
-                                        editCancel: editCancel
+                                        editCancel: editCancel,
+                                        onOpenPhonoscope: openPhonoscope
                                     )
                                     // Tail spacer: lets the last control scroll
                                     // clear of the trailing edge when centred.
@@ -116,8 +123,22 @@ struct TVDashboardView: View {
                         .padding(.horizontal, 54)
                         .padding(.bottom, 18)
                 }
+                }
+            }
+            .opacity(isPhonoscopePresented ? 0 : 1)
+
+            if isPhonoscopePresented {
+                PhonoscopeView(onBack: dismissPhonoscope)
+                    .environmentObject(phonoscope)
+                    .transition(.opacity)
+                    .zIndex(10_000)
             }
         }
+        .background(Color.black)
+        .animation(
+            .easeInOut(duration: Double(phonoscope.configuration?.transitionMs ?? 600) / 1_000),
+            value: isPhonoscopePresented
+        )
         .foregroundStyle(store.theme.text)
         .focusEffectDisabled()
         .onMoveCommand(perform: handleMove)
@@ -128,7 +149,7 @@ struct TVDashboardView: View {
             }
 
             guard let state = store.state else { return }
-            if let zoneID = nextFocus?.zoneID {
+            if let zoneID = nextFocus?.zoneID, zoneID != phonoscopeZoneID {
                 store.selectedZoneID = zoneID
             }
             collapseIfFocusLeftExpandedArea(nextFocus, state: state)
@@ -137,6 +158,20 @@ struct TVDashboardView: View {
             if focus == nil, let firstZoneID {
                 focus = .section(firstZoneID)
             }
+        }
+        .onChange(of: isPhonoscopePresented) { _, presented in
+            setScreenAwake(presented)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // tvOS can rebuild or reactivate the SwiftUI scene after overlays
+            // and interruptions. Reassert the lease when the app returns so
+            // the system screen saver cannot take over a running visualiser.
+            if phase == .active {
+                setScreenAwake(isPhonoscopePresented)
+            }
+        }
+        .onDisappear {
+            setScreenAwake(false)
         }
         // Full-screen camera player, hosted by the root so it survives the zone
         // collapsing or the camera tile unmounting while the modal holds focus.
@@ -166,6 +201,7 @@ struct TVDashboardView: View {
     /// serialized `editMove` to that control; otherwise it advances focus through
     /// the graph. Both paths run through `RemoteMoveGate` for debounce/gating.
     private func handleMove(_ direction: MoveCommandDirection) {
+        guard !isPhonoscopePresented else { return }
         guard let remoteDirection = RemoteDirection(direction) else { return }
         rootBackExitGate.reset()
 
@@ -195,6 +231,17 @@ struct TVDashboardView: View {
     /// exit button.
     private func handleExit() {
         exitCommandSerial &+= 1
+        let now = ProcessInfo.processInfo.systemUptime
+
+        if isPhonoscopePresented {
+            dismissPhonoscope()
+            return
+        }
+
+        if exitCommandShield.contains(now) {
+            debugInteractionLog("ignored trailing exit command after Phonoscope dismissal")
+            return
+        }
 
         // Menu/Back while the full-screen camera is up dismisses just the
         // player — it must not fall through and collapse the underlying zone.
@@ -219,7 +266,6 @@ struct TVDashboardView: View {
             return
         }
 
-        let now = ProcessInfo.processInfo.systemUptime
         guard rootBackExitGate.register(at: now) else {
             debugInteractionLog("exit armed at root")
             return
@@ -227,6 +273,36 @@ struct TVDashboardView: View {
 
         debugInteractionLog("exit confirmed by double Back at root")
         exit(EXIT_SUCCESS)
+    }
+
+    private func dismissPhonoscope() {
+        let now = ProcessInfo.processInfo.systemUptime
+        exitCommandShield.begin(at: now)
+        rootBackExitGate.reset()
+        withAnimation {
+            isPhonoscopePresented = false
+        }
+        focus = .section(phonoscopeZoneID)
+    }
+
+    private func openPhonoscope() {
+        editingFocus = nil
+        expandedTopZoneID = nil
+        expandedChildZoneID = nil
+        rootBackExitGate.reset()
+        withAnimation {
+            isPhonoscopePresented = true
+        }
+    }
+
+    /// Phonoscope is an intentionally unattended, continuously animated
+    /// display. Own the global UIKit idle-timer lease at this stable root
+    /// rather than the transient Metal child view so SwiftUI focus/view
+    /// reconstruction cannot accidentally release it.
+    private func setScreenAwake(_ awake: Bool) {
+        guard UIApplication.shared.isIdleTimerDisabled != awake else { return }
+        UIApplication.shared.isIdleTimerDisabled = awake
+        debugInteractionLog("Phonoscope screen-awake lease \(awake ? "enabled" : "released")")
     }
 
     /// Steps exactly one level shallower: collapse an open child, else an open
@@ -571,6 +647,7 @@ private struct ZoneRibbon: View {
     @Binding var editingFocus: DashboardFocus?
     let editMove: DashboardEditMove?
     let editCancel: DashboardEditCancel?
+    let onOpenPhonoscope: () -> Void
 
     var body: some View {
         HStack(alignment: .center, spacing: 18) {
@@ -602,6 +679,17 @@ private struct ZoneRibbon: View {
                         }
                         .frame(maxHeight: .infinity)
                     }
+
+                    RibbonTitleButton(
+                        title: "PHONOSCOPE",
+                        subtitle: "MUSIC VISUALISER",
+                        focus: focus,
+                        focusValue: .section(phonoscopeZoneID),
+                        isFocused: focus.wrappedValue == .section(phonoscopeZoneID),
+                        isExpanded: false,
+                        action: onOpenPhonoscope
+                    )
+                    .frame(maxHeight: .infinity)
                 }
                 .frame(width: 240).frame(maxHeight: .infinity)
             }
