@@ -29,6 +29,7 @@ private struct PhonoscopeSimEntity {
     var flareSize: Float = 0
     var flareGlow: Float = 0
     var glow: Float = 0.4
+    var trailLength: Float = 0
     var primitive: Float = 0
     var material: Float = 0
     var color = SIMD4<Float>(0.22, 0.72, 1, 0.8)
@@ -401,6 +402,7 @@ final class PhonoscopeSimulation {
         let flareThreshold = Float(PhonoscopeExpression.evaluate(render["flareThreshold"], inputs: inputs, fallback: 2))
         let flareSize = Float(PhonoscopeExpression.evaluate(render["flareSize"], inputs: inputs, fallback: 0))
         let flareGlow = Float(PhonoscopeExpression.evaluate(render["flareGlow"], inputs: inputs, fallback: 0))
+        let trailLength = Float(PhonoscopeExpression.evaluate(render["trailLength"], inputs: inputs, fallback: 0))
         let lifetime = Float(PhonoscopeExpression.evaluate(value["lifetime"], inputs: inputs, fallback: 0))
         let transform = value["transform"]?.objectValue
         let scaleValue = transform?["scale"]
@@ -441,6 +443,7 @@ final class PhonoscopeSimulation {
             flareSize: max(0, min(0.32, flareSize)),
             flareGlow: max(0, min(12, flareGlow)),
             glow: max(0, min(3, glow)),
+            trailLength: max(0, min(32, trailLength)),
             primitive: primitiveCode(primitiveName),
             material: materialCode(materialName),
             color: color,
@@ -803,7 +806,9 @@ final class PhonoscopeSimulation {
     private func publish(started: CFTimeInterval, diagnostics initialDiagnostics: PhonoscopeDiagnostics) {
         var diagnostics = initialDiagnostics
         diagnostics.simulationMilliseconds = (CACurrentMediaTime() - started) * 1_000
-        let particles = entities.map { entity -> PhonoscopeRenderParticle in
+        var particles: [PhonoscopeRenderParticle] = []
+        particles.reserveCapacity(entities.count * 2)
+        for entity in entities {
             let energy = min(1, max(0, entity.energy))
             let linearFlare = entity.flareThreshold < 1
                 ? max(0, min(1, (energy - entity.flareThreshold) / (1 - entity.flareThreshold)))
@@ -813,17 +818,37 @@ final class PhonoscopeSimulation {
             let baseColor = usesThemePalette ? palette.accent : entity.color
             let peakColor = usesThemePalette ? palette.highlight : entity.color
             let color = simd_mix(baseColor, peakColor, SIMD4<Float>(repeating: energy))
-            return PhonoscopeRenderParticle(
+            let size = entity.size
+                + energy * entity.energySize
+                + Float(signal.beatPulse) * entity.beatSize
+                + flare * entity.flareSize
+            let glow = entity.glow + energy + flare * entity.flareGlow
+            particles.append(PhonoscopeRenderParticle(
                 position: entity.position,
                 color: color,
-                size: entity.size
-                    + energy * entity.energySize
-                    + Float(signal.beatPulse) * entity.beatSize
-                    + flare * entity.flareSize,
-                glow: entity.glow + energy + flare * entity.flareGlow,
+                size: size,
+                glow: glow,
                 primitive: entity.primitive,
-                material: entity.material
-            )
+                material: entity.material,
+                trailDirection: .zero,
+                trailLength: 0
+            ))
+
+            let trailDirection = entity.position - entity.origin
+            if entity.trailLength > 0,
+               linearFlare > 0,
+               simd_length_squared(trailDirection) > 0.000_000_01 {
+                particles.append(PhonoscopeRenderParticle(
+                    position: entity.position,
+                    color: color,
+                    size: size,
+                    glow: glow,
+                    primitive: 5,
+                    material: entity.material,
+                    trailDirection: trailDirection,
+                    trailLength: entity.trailLength
+                ))
+            }
         }
         serial &+= 1
         let snapshot = PhonoscopeSceneSnapshot(

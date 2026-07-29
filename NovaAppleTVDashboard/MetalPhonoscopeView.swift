@@ -5,6 +5,7 @@ private struct PhonoscopeGPUParticle {
     var positionSize: SIMD4<Float>
     var color: SIMD4<Float>
     var meta: SIMD4<Float>
+    var trail: SIMD4<Float>
 }
 
 private struct PhonoscopeGPUUniforms {
@@ -187,7 +188,13 @@ final class MetalPhonoscopeRenderer: NSObject, MTKViewDelegate {
                 PhonoscopeGPUParticle(
                     positionSize: SIMD4($0.position.x, $0.position.y, $0.position.z, $0.size),
                     color: $0.color,
-                    meta: SIMD4($0.glow, $0.primitive, $0.material, 0)
+                    meta: SIMD4($0.glow, $0.primitive, $0.material, 0),
+                    trail: SIMD4(
+                        $0.trailDirection.x,
+                        $0.trailDirection.y,
+                        $0.trailDirection.z,
+                        $0.trailLength
+                    )
                 )
             }
             ensureParticleCapacity(particles.count)
