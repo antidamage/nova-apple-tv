@@ -1,6 +1,8 @@
 import Foundation
 import SwiftUI
 
+let phonoscopeZoneID = "__phonoscope"
+
 // Focus model + remote-input gating + the focus graph that drives all
 // navigation. The dashboard does not use the system focus engine for movement;
 // it owns focus explicitly via `@FocusState<DashboardFocus?>` so the layout can
@@ -112,6 +114,21 @@ struct RootBackExitGate {
 
     mutating func reset() {
         firstPressAt = nil
+    }
+}
+
+/// Absorbs duplicate/trailing tvOS exit callbacks after a modal-style surface
+/// has handled Back. A single Siri Remote gesture can produce more than one
+/// callback while the focus tree is being rebuilt.
+struct ExitCommandShield {
+    private var suppressUntil: TimeInterval = 0
+
+    mutating func begin(at now: TimeInterval, duration: TimeInterval = 1.25) {
+        suppressUntil = max(suppressUntil, now + duration)
+    }
+
+    func contains(_ now: TimeInterval) -> Bool {
+        now < suppressUntil
     }
 }
 
@@ -336,7 +353,7 @@ struct DashboardFocusGraph {
 /// no position and navigation collapses to the first zone button.
 func dashboardFocusGraph(state: DashboardState, expandedTopZoneID: String?, expandedChildZoneID: String?) -> DashboardFocusGraph {
     var rows: [[DashboardFocus]] = [
-        state.primaryZones.map { DashboardFocus.section($0.id) }
+        state.primaryZones.map { DashboardFocus.section($0.id) } + [.section(phonoscopeZoneID)]
     ]
 
     guard let expandedTopZoneID,
