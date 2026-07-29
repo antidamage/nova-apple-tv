@@ -38,4 +38,32 @@ build_status=${pipestatus[1]}
 echo "${build_status}" > gui-build.status
 echo
 echo "Nova Apple TV device build exited with status ${build_status}."
+
+# The GUI Terminal is needed for Xcode's signing/keychain context, but it does
+# not need to linger after a successful unattended build. Find this exact tab
+# by TTY so another Terminal window is never closed. Set the variable to 0 to
+# retain the tab for inspection.
+if [[ "${build_status}" -eq 0 && "${NOVA_APPLE_TV_CLOSE_TERMINAL_ON_SUCCESS:-1}" == "1" ]]; then
+  terminal_tty="$(tty)"
+  (
+    sleep 1
+    osascript - "${terminal_tty}" <<'APPLESCRIPT' >/dev/null 2>&1
+on run argv
+	set targetTty to item 1 of argv
+	tell application "Terminal"
+		repeat with terminalWindow in windows
+			repeat with terminalTab in tabs of terminalWindow
+				if tty of terminalTab is targetTty then
+					close terminalTab
+					return
+				end if
+			end repeat
+		end repeat
+	end tell
+end run
+APPLESCRIPT
+  ) &
+  disown
+fi
+
 exit "${build_status}"

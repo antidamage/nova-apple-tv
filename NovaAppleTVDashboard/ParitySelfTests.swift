@@ -12,6 +12,7 @@ enum ParitySelfTests {
         testOrbContract()
         testSpeechEnvelope()
         testRootBackExitGate()
+        testExitCommandShield()
     }
 
     private static func testClockFormatting() {
@@ -138,6 +139,15 @@ enum ParitySelfTests {
         assert(!gate.register(at: 20))
         assert(!gate.register(at: 21.1))
         assert(gate.register(at: 21.9))
+    }
+
+    private static func testExitCommandShield() {
+        var shield = ExitCommandShield()
+        assert(!shield.contains(10))
+        shield.begin(at: 10, duration: 1.25)
+        assert(shield.contains(10))
+        assert(shield.contains(11.24))
+        assert(!shield.contains(11.25))
     }
 }
 #endif
