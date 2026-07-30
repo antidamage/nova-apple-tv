@@ -26,6 +26,8 @@ struct MetalPhonoscopeView: UIViewRepresentable {
     let signal: PhonoscopeSignalFrame
     let settings: [String: Double]
     let theme: DashboardTheme
+    let transitionDuration: Double
+    let reloadGeneration: Int
     let letterboxedBackground: Bool
 
     func makeCoordinator() -> MetalPhonoscopeCoordinator {
@@ -57,7 +59,9 @@ struct MetalPhonoscopeView: UIViewRepresentable {
             module: module,
             signal: signal,
             settings: settings,
-            palette: palette
+            palette: palette,
+            transitionDuration: transitionDuration,
+            reloadGeneration: reloadGeneration
         )
         return view
     }
@@ -72,7 +76,9 @@ struct MetalPhonoscopeView: UIViewRepresentable {
             module: module,
             signal: signal,
             settings: settings,
-            palette: palette
+            palette: palette,
+            transitionDuration: transitionDuration,
+            reloadGeneration: reloadGeneration
         )
     }
 

@@ -8,6 +8,7 @@ struct FluidBackgroundView: UIViewRepresentable {
     var baseURL: URL = AppConfig.dashboardBaseURL
     var blobScale: Float = 1
     var blobSoftness: Float = 1
+    var allowsDisplacementTexture: Bool = true
 
     func makeCoordinator() -> FluidBackgroundCoordinator {
         FluidBackgroundCoordinator()
@@ -26,6 +27,7 @@ struct FluidBackgroundView: UIViewRepresentable {
         renderer.theme = theme
         renderer.blobScale = blobScale
         renderer.blobSoftness = blobSoftness
+        renderer.allowsDisplacementTexture = allowsDisplacementTexture
         let view = MTKView(frame: .zero, device: device)
         view.backgroundColor = UIColor(theme.background.color)
         view.clearColor = theme.clearColor
@@ -44,6 +46,7 @@ struct FluidBackgroundView: UIViewRepresentable {
         context.coordinator.renderer?.theme = theme
         context.coordinator.renderer?.blobScale = blobScale
         context.coordinator.renderer?.blobSoftness = blobSoftness
+        context.coordinator.renderer?.allowsDisplacementTexture = allowsDisplacementTexture
         if let view = uiView as? MTKView {
             view.backgroundColor = UIColor(theme.background.color)
             view.clearColor = theme.clearColor
@@ -95,6 +98,7 @@ final class FluidBackgroundRenderer: NSObject, MTKViewDelegate {
     var baseURL: URL = AppConfig.dashboardBaseURL
     var blobScale: Float = 1
     var blobSoftness: Float = 1
+    var allowsDisplacementTexture = true
 
     private var mosaicTexture: MTLTexture?
     private var loadedTextureKey: String?
@@ -173,6 +177,11 @@ final class FluidBackgroundRenderer: NSObject, MTKViewDelegate {
     // absolute (http/https) or relative to the dashboard host; relative URLs are
     // resolved against `baseURL`. Reloads only when the URL changes.
     private func updateMosaicTextureIfNeeded() {
+        guard allowsDisplacementTexture else {
+            loadedTextureKey = nil
+            mosaicTexture = nil
+            return
+        }
         let key = theme.backgroundEffect.textureURL ?? ""
         guard key != loadedTextureKey else { return }
         loadedTextureKey = key

@@ -52,6 +52,7 @@ private struct PhonoscopeFieldRange {
     let depth: Int
     let topology: String
     let spacing: Float
+    let wireframe: PhonoscopeJSONValue?
     let radialBeatWave: PhonoscopeFieldWaveSource?
 }
 
@@ -112,12 +113,19 @@ final class PhonoscopeSimulation {
     private var pendingSignal = PhonoscopeSignalFrame.idle
     private var pendingSettings: [String: Double] = [:]
     private var pendingPalette = PhonoscopePalette.default
+    private var pendingTransitionDuration: Double = 0.6
+    private var pendingReloadGeneration = 0
     private var pendingModuleKey = ""
 
     private var module: PhonoscopeModule?
     private var signal = PhonoscopeSignalFrame.idle
     private var settings: [String: Double] = [:]
     private var palette = PhonoscopePalette.default
+    private var settingStarts: [String: Double] = [:]
+    private var targetSettings: [String: Double] = [:]
+    private var transitionStarted = CACurrentMediaTime()
+    private var transitionDuration: Double = 0.6
+    private var reloadGeneration = 0
     private var moduleKey = ""
     private var entities: [PhonoscopeSimEntity] = []
     private var fields: [PhonoscopeFieldRange] = []
@@ -151,13 +159,17 @@ final class PhonoscopeSimulation {
         module: PhonoscopeModule?,
         signal: PhonoscopeSignalFrame,
         settings: [String: Double],
-        palette: PhonoscopePalette
+        palette: PhonoscopePalette,
+        transitionDuration: Double,
+        reloadGeneration: Int
     ) {
         inputLock.lock()
         pendingModule = module
         pendingSignal = signal
         pendingSettings = settings
         pendingPalette = palette
+        pendingTransitionDuration = max(0, min(600, transitionDuration))
+        pendingReloadGeneration = reloadGeneration
         pendingModuleKey = module.map { "\($0.id)@\($0.version)" } ?? ""
         inputLock.unlock()
     }
@@ -174,14 +186,25 @@ final class PhonoscopeSimulation {
         let nextSignal = pendingSignal
         let nextSettings = pendingSettings
         let nextPalette = pendingPalette
+        let nextTransitionDuration = pendingTransitionDuration
+        let nextReloadGeneration = pendingReloadGeneration
         let nextKey = pendingModuleKey
         inputLock.unlock()
-        let requiresRebuild = nextKey != moduleKey || nextSettings != settings || nextPalette != palette
+        let requiresRebuild = nextKey != moduleKey || nextReloadGeneration != reloadGeneration
+        if nextSettings != targetSettings {
+            settingStarts = settings
+            targetSettings = nextSettings
+            transitionStarted = CACurrentMediaTime()
+            transitionDuration = nextTransitionDuration
+        }
+        palette = nextPalette
         moduleKey = nextKey
         module = nextModule
-        settings = nextSettings
-        palette = nextPalette
+        reloadGeneration = nextReloadGeneration
         if requiresRebuild {
+            settings = nextSettings
+            targetSettings = nextSettings
+            palette = nextPalette
             rebuild()
         }
         signal = nextSignal
@@ -198,6 +221,7 @@ final class PhonoscopeSimulation {
             let now = CACurrentMediaTime()
             let dt = Float(min(1.0 / 30.0, max(1.0 / 120.0, now - lastTick)))
             lastTick = now
+            advanceConfiguration(now: now)
             advanceSignal(by: Double(dt))
             var diagnostics = PhonoscopeDiagnostics()
 
@@ -212,6 +236,25 @@ final class PhonoscopeSimulation {
             diagnostics.entityCount = entities.count
             diagnostics.particleCount = min(module.resources.maxParticles, entities.count)
             publish(started: started, diagnostics: diagnostics)
+        }
+    }
+
+    private func advanceConfiguration(now: CFTimeInterval) {
+        let amount = transitionDuration == 0 ? 1 : min(1, max(0, (now - transitionStarted) / transitionDuration))
+        let eased = amount * amount * (3 - 2 * amount)
+        for (key, target) in targetSettings {
+            let start = settingStarts[key] ?? settings[key] ?? target
+            settings[key] = start + (target - start) * eased
+        }
+        if module?.id == "particle-ripples" {
+            let threshold = Float(settings["peak_threshold"] ?? 0.28)
+            let glow = Float(settings["peak_glow"] ?? 6.5)
+            let trail = Float(settings["trail_length"] ?? 7)
+            for index in entities.indices {
+                entities[index].flareThreshold = threshold
+                entities[index].flareGlow = glow
+                entities[index].trailLength = trail
+            }
         }
     }
 
@@ -257,17 +300,49 @@ final class PhonoscopeSimulation {
             }
             let requested = Int(field["count"]?.numberValue ?? 0)
             let resolution = field["resolution"]?.arrayValue?.compactMap(\.numberValue).map(Int.init) ?? []
-            let columns = max(1, resolution.first ?? Int(sqrt(Double(max(1, requested)))))
-            let rows = max(1, resolution.count > 1 ? resolution[1] : max(1, requested / columns))
-            let depth = max(1, module.is3D && resolution.count > 2 ? resolution[2] : 1)
-            let count = min(max(1, requested > 0 ? requested : columns * rows * depth), maximum - entities.count)
+            let baseColumns = max(1, resolution.first ?? Int(sqrt(Double(max(1, requested)))))
+            let baseRows = max(1, resolution.count > 1 ? resolution[1] : max(1, requested / baseColumns))
+            let baseDepth = max(1, module.is3D && resolution.count > 2 ? resolution[2] : 1)
+            let layout = field["layout"]?.stringValue ?? "grid"
+            let inputs = expressionInputs(random: 0.5)
+            let density = Float(PhonoscopeExpression.evaluate(field["density"], inputs: inputs, fallback: 1))
+            let normalizedDensity = max(0.05, min(1, density))
+            let axisScale = module.is3D ? pow(normalizedDensity, 1.0 / 3.0) : sqrt(normalizedDensity)
+            let columns = layout == "grid" ? max(1, Int((Float(baseColumns) * axisScale).rounded())) : baseColumns
+            let rows = layout == "grid" ? max(1, Int((Float(baseRows) * axisScale).rounded())) : baseRows
+            let depth = layout == "grid" ? max(1, Int((Float(baseDepth) * axisScale).rounded())) : baseDepth
+            let requestedCount = requested > 0 ? requested : baseColumns * baseRows * baseDepth
+            let scaledCount = layout == "grid"
+                ? columns * rows * depth
+                : Int((Float(requestedCount) * normalizedDensity).rounded())
+            let count = min(max(1, scaledCount), maximum - entities.count)
             if count <= 0 { break }
             let start = entities.count
-            let layout = field["layout"]?.stringValue ?? "grid"
             let declaredSpacing = field["spacing"]?.arrayValue?.compactMap(\.numberValue).map(Float.init) ?? []
-            let spacingX = declaredSpacing.first.flatMap { $0 > 0 ? $0 : nil }
-            let spacingY = declaredSpacing.dropFirst().first.flatMap { $0 > 0 ? $0 : nil }
-            let spacingZ = declaredSpacing.dropFirst(2).first.flatMap { $0 > 0 ? $0 : nil }
+            let usesDensity = field["density"] != nil
+            func resolvedSpacing(_ declared: Float?, baseCount: Int, scaledCount: Int) -> Float? {
+                guard let declared, declared > 0 else { return nil }
+                guard usesDensity, baseCount > 1, scaledCount > 1 else { return declared }
+                // Density changes entity count, not the visual footprint. Preserve
+                // the module author's original grid extent instead of stretching
+                // the field to the module's full bounds.
+                return declared * Float(baseCount - 1) / Float(scaledCount - 1)
+            }
+            let spacingX = resolvedSpacing(
+                declaredSpacing.first,
+                baseCount: baseColumns,
+                scaledCount: columns
+            )
+            let spacingY = resolvedSpacing(
+                declaredSpacing.dropFirst().first,
+                baseCount: baseRows,
+                scaledCount: rows
+            )
+            let spacingZ = resolvedSpacing(
+                declaredSpacing.dropFirst(2).first,
+                baseCount: baseDepth,
+                scaledCount: depth
+            )
             let center = (module.minimum + module.maximum) * 0.5
             let fieldTemplate = field["template"]?.stringValue
                 .flatMap { module.templates[$0] }
@@ -315,6 +390,7 @@ final class PhonoscopeSimulation {
                 depth: depth,
                 topology: field["topology"]?.stringValue ?? "grid",
                 spacing: max(0.0001, min(spacingX ?? fallbackSpacingX, spacingY ?? fallbackSpacingY)),
+                wireframe: field["wireframe"],
                 radialBeatWave: radialBeatWave(in: resolvedScene)
             ))
             if fields.last?.radialBeatWave != nil {
@@ -340,6 +416,7 @@ final class PhonoscopeSimulation {
                 depth: 1,
                 topology: "nearest",
                 spacing: 1,
+                wireframe: nil,
                 radialBeatWave: nil
             ))
         }
@@ -612,6 +689,7 @@ final class PhonoscopeSimulation {
     }
 
     private func advanceFieldWaves(dt: Float) {
+        let offsetMagnifier = Float(max(0, min(50, settings["offset_magnifier"] ?? 1)))
         for index in entities.indices where entities[index].usesAnalyticWave {
             entities[index].waveOffset = .zero
             entities[index].waveTarget = 0
@@ -657,6 +735,7 @@ final class PhonoscopeSimulation {
                         let gerstnerOffset = direction
                             * horizontalAmplitude
                             * crest
+                            * offsetMagnifier
                         entities[entityIndex].waveOffset += SIMD3(
                             gerstnerOffset.x,
                             gerstnerOffset.y,
@@ -807,17 +886,21 @@ final class PhonoscopeSimulation {
         var diagnostics = initialDiagnostics
         diagnostics.simulationMilliseconds = (CACurrentMediaTime() - started) * 1_000
         var particles: [PhonoscopeRenderParticle] = []
-        particles.reserveCapacity(entities.count * 2)
+        particles.reserveCapacity(entities.count * 3)
+        func renderedColor(for entity: PhonoscopeSimEntity) -> SIMD4<Float> {
+            let energy = min(1, max(0, entity.energy))
+            let usesThemePalette = entity.usesThemePalette || module?.id == "particle-ripples"
+            let baseColor = usesThemePalette ? palette.accent : entity.color
+            let peakColor = usesThemePalette ? palette.highlight : entity.color
+            return simd_mix(baseColor, peakColor, SIMD4<Float>(repeating: energy))
+        }
         for entity in entities {
             let energy = min(1, max(0, entity.energy))
             let linearFlare = entity.flareThreshold < 1
                 ? max(0, min(1, (energy - entity.flareThreshold) / (1 - entity.flareThreshold)))
                 : 0
             let flare = linearFlare * linearFlare * (3 - 2 * linearFlare)
-            let usesThemePalette = entity.usesThemePalette || module?.id == "particle-ripples"
-            let baseColor = usesThemePalette ? palette.accent : entity.color
-            let peakColor = usesThemePalette ? palette.highlight : entity.color
-            let color = simd_mix(baseColor, peakColor, SIMD4<Float>(repeating: energy))
+            let color = renderedColor(for: entity)
             let size = entity.size
                 + energy * entity.energySize
                 + Float(signal.beatPulse) * entity.beatSize
@@ -848,6 +931,42 @@ final class PhonoscopeSimulation {
                     trailDirection: trailDirection,
                     trailLength: entity.trailLength
                 ))
+            }
+        }
+        let inputs = expressionInputs(random: 0.5)
+        for field in fields where field.topology == "grid"
+            && PhonoscopeExpression.evaluate(field.wireframe, inputs: inputs, fallback: 0) >= 0.5 {
+            guard field.columns > 0, field.rows > 0 else { continue }
+            let layerSize = field.columns * field.rows
+            func appendLine(from start: Int, to end: Int) {
+                guard field.range.contains(start), field.range.contains(end) else { return }
+                let source = entities[start]
+                let destination = entities[end]
+                var lineColor = simd_mix(
+                    renderedColor(for: source),
+                    renderedColor(for: destination),
+                    SIMD4<Float>(repeating: 0.5)
+                )
+                lineColor.w = 0.5
+                particles.append(PhonoscopeRenderParticle(
+                    position: destination.position,
+                    color: lineColor,
+                    size: max(0.0006, min(source.size, destination.size) * 0.18),
+                    glow: 0,
+                    primitive: 6,
+                    material: 0,
+                    trailDirection: destination.position - source.position,
+                    trailLength: 1
+                ))
+            }
+            for z in 0..<field.depth {
+                for y in 0..<field.rows {
+                    for x in 0..<field.columns {
+                        let index = field.range.lowerBound + z * layerSize + y * field.columns + x
+                        if x + 1 < field.columns { appendLine(from: index, to: index + 1) }
+                        if y + 1 < field.rows { appendLine(from: index, to: index + field.columns) }
+                    }
+                }
             }
         }
         serial &+= 1

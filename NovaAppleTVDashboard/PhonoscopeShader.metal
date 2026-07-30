@@ -63,7 +63,26 @@ vertex PhonoscopeVertexOut phonoscope_vertex(
     float aspect = max(0.01, uniforms.viewport.x / max(1.0, uniforms.viewport.y));
 
     PhonoscopeVertexOut out;
-    if (particle.meta.y > 4.5 && particle.trail.w > 0.0) {
+    if (particle.meta.y > 5.5 && particle.trail.w > 0.0) {
+        float2 delta = particle.trail.xy;
+        if (is3D <= 0.5) {
+            float2 extent = max(float2(0.0001), (uniforms.boundsMax.xy - uniforms.boundsMin.xy) * 0.5);
+            delta /= extent;
+        }
+        float2 screenDelta = float2(delta.x * aspect, delta.y);
+        float deltaLength = length(screenDelta);
+        float2 screenDirection = deltaLength > 0.00001
+            ? screenDelta / deltaLength
+            : float2(1.0, 0.0);
+        float2 clipNormal = float2(-screenDirection.y / aspect, screenDirection.x);
+        float progress = (corners[vertexID].x + 1.0) * 0.5;
+        float2 lineCenter = p.xy - delta * (1.0 - progress);
+        out.position = float4(
+            lineCenter + clipNormal * corners[vertexID].y * particle.positionSize.w,
+            0,
+            1
+        );
+    } else if (particle.meta.y > 4.5 && particle.trail.w > 0.0) {
         float2 direction = particle.trail.xy;
         if (is3D <= 0.5) {
             float2 extent = max(float2(0.0001), (uniforms.boundsMax.xy - uniforms.boundsMin.xy) * 0.5);
@@ -124,11 +143,14 @@ fragment float4 phonoscope_fragment(PhonoscopeVertexOut in [[stage_in]]) {
         float edge = max(abs(in.local.x), abs(in.local.y));
         core = smoothstep(0.15, 0.015, abs(edge - 0.82));
         halo = exp(-radius * radius * 3.2) * in.glow;
-    } else {
+    } else if (in.primitive < 5.5) {
         float progress = clamp((in.local.x + 1.0) * 0.5, 0.0, 1.0);
         float brightness = pow(progress, 1.45);
         core = smoothstep(1.0, 0.08, abs(in.local.y)) * brightness;
         halo = exp(-in.local.y * in.local.y * 3.2) * in.glow * brightness;
+    } else {
+        core = smoothstep(1.0, 0.2, abs(in.local.y));
+        halo = 0.0;
     }
     float lighting = 1.0;
     if (in.material > 0.5 && in.material < 1.5 && radius <= 1.0) {

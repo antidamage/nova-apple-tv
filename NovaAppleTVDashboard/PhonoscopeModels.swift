@@ -73,6 +73,8 @@ struct PhonoscopeModuleSetting: Decodable, Equatable {
     let affects: [String]?
     let curve: Curve?
     let options: [Option]?
+    let section: String?
+    let updateMode: String?
 }
 
 struct PhonoscopeBoundary: Decodable, Equatable {
@@ -153,15 +155,79 @@ struct PhonoscopeConfiguration: Decodable, Equatable {
     let activeModuleVersion: String
     let idleBehavior: String
     let quality: String
+    let message: String?
     let statusOverlay: Bool
     let transitionMs: Int
     let providers: PhonoscopeProviderConfig
     let moduleSettings: [String: [String: Double]]
+    let pendingStructuralModuleSettings: [String: [String: Double]]
+    let moduleReloadGenerations: [String: Int]
+    let themeGroups: [PhonoscopeThemeGroup]
+    let moduleThemeGroupIds: [String: String]
+}
+
+struct PhonoscopeThemeGroupEntry: Decodable, Equatable {
+    let themeId: String
+    let baseVariant: String
+    let swapOnDownbeat: Bool
+    let genres: [String]
+}
+
+struct PhonoscopeThemeGroup: Decodable, Equatable {
+    let id: String
+    let name: String
+    let themes: [PhonoscopeThemeGroupEntry]
+    let useGenres: Bool
+    let order: String
+    let changeMode: String
+    let waitSeconds: Double
+    let transitionSeconds: Double
+    let housePartyHueMode: String
+    let housePartyBrightnessMode: String
+}
+
+struct HousePartySessionEnvelope: Decodable {
+    let id: String
+    let leaseMs: Int
+}
+
+struct HousePartyFramePayload: Encodable {
+    let sequence: Int
+    let peakRgb: [Int]
+    let peakBrightnessPct: Double
+    let cloudPeakBrightnessPct: Double
+    let transitionSeconds: Double
+    let hueMode: String
+    let brightnessMode: String
+    let ambient: Bool
+    let themeId: String?
+    let themeVariant: String?
+    let themeTransitionSeconds: Double
+    let clock: HousePartyMasterClockPayload?
+}
+
+struct HousePartyMasterClockPayload: Encodable {
+    let trackKey: String?
+    let position: Double
+    let duration: Double
+    let playing: Bool
+    let sampledAtMs: Double
+}
+
+struct PhonoscopeThemeLibrary: Decodable {
+    let entries: [PhonoscopeThemeLibraryEntry]
+}
+
+struct PhonoscopeThemeLibraryEntry: Decodable {
+    let id: String
+    let name: String
+    let themeSet: SharedThemePayload
 }
 
 struct PhonoscopeConfigurationEnvelope: Decodable {
     let config: PhonoscopeConfiguration
     let modules: [PhonoscopeModuleSummary]
+    let themeLibrary: PhonoscopeThemeLibrary?
 }
 
 struct PhonoscopeTimedLyric: Decodable, Equatable {
@@ -177,6 +243,7 @@ struct PhonoscopeTrackIdentity: Codable, Equatable {
     let album: String?
     let duration: Double
     let artworkUrl: String?
+    let genreNames: [String]?
 }
 
 struct PhonoscopeTrackAnalysis: Decodable, Equatable {
@@ -186,6 +253,8 @@ struct PhonoscopeTrackAnalysis: Decodable, Equatable {
     let sourceTier: String
     let bpm: Double?
     let beatOffset: Double
+    let beatTimes: [Double]
+    let beatSource: String
     let timeSignature: Int
     let key: String?
     let energy: Double?

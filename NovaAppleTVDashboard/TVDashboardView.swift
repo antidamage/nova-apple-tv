@@ -161,6 +161,33 @@ struct TVDashboardView: View {
         }
         .onChange(of: isPhonoscopePresented) { _, presented in
             setScreenAwake(presented)
+            if !presented, phonoscope.housePartyEnabled {
+                // The dashboard is fully transparent while Phonoscope is up.
+                // Keep its followed palette intact through the crossfade back,
+                // then visibly ease from those colours to the configured theme.
+                store.clearVisualizerColorOverride(
+                    duration: phonoscopeTransitionSeconds,
+                    delay: phonoscopeTransitionSeconds
+                )
+            }
+        }
+        .onChange(of: phonoscope.visualizerTheme) { _, visualizerTheme in
+            guard phonoscope.housePartyEnabled else { return }
+            store.setVisualizerColorOverride(visualizerTheme)
+        }
+        .onChange(of: store.followVisualizerWhenActive) { _, followsVisualizer in
+            if followsVisualizer, phonoscope.housePartyEnabled {
+                store.setVisualizerColorOverride(phonoscope.visualizerTheme)
+            } else if !followsVisualizer {
+                store.clearVisualizerColorOverride(duration: phonoscopeTransitionSeconds)
+            }
+        }
+        .onChange(of: phonoscope.housePartyEnabled) { _, housePartyEnabled in
+            if housePartyEnabled {
+                store.setVisualizerColorOverride(phonoscope.visualizerTheme)
+            } else {
+                store.clearVisualizerColorOverride(duration: phonoscopeTransitionSeconds)
+            }
         }
         .onChange(of: scenePhase) { _, phase in
             // tvOS can rebuild or reactivate the SwiftUI scene after overlays
@@ -283,6 +310,10 @@ struct TVDashboardView: View {
             isPhonoscopePresented = false
         }
         focus = .section(phonoscopeZoneID)
+    }
+
+    private var phonoscopeTransitionSeconds: Double {
+        Double(phonoscope.configuration?.transitionMs ?? 600) / 1_000
     }
 
     private func openPhonoscope() {

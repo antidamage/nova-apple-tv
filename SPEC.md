@@ -537,7 +537,29 @@ A Metal-rendered animated field that mirrors the web dashboard's background.
 
 ---
 
-## 14. Accessibility
+## 14. Phonoscope beat synchronisation
+
+- Track resolution returns Nova's complete cached `beatTimes` timeline at song
+  start. The Apple TV aligns that timeline to `SystemMusicPlayer.playbackTime`;
+  it does not call ReccoBeats or synthesize its own independent clock.
+- The local renderer uses the current playback position. House Party separately
+  samples the same timeline 250 ms ahead for local HA lights and 1.10 seconds
+  ahead for cloud-backed Tuya lights, compensating for their different command
+  paths without advancing the on-screen visualiser.
+- When a cached timeline is unavailable, the client retains the BPM/offset
+  fallback so playback and controls remain usable offline.
+- The Apple TV is the distributed playback-clock master. Every House Party
+  frame can carry its current track and playback observation; Nova extrapolates
+  that state for polling clients. Track changes, play/pause changes, resets, and
+  seeks of at least 650 ms bypass normal frame suppression and publish
+  immediately instead of waiting for the periodic keepalive.
+- The remote-revealed House Party action bar stays visually subordinate to the
+  visualiser: a fixed dark-charcoal surface, 75% grey label, plain button style,
+  and disabled tvOS focus effect so focus cannot replace it with a white plate.
+
+---
+
+## 15. Accessibility
 
 - Interactive controls carry `.isButton`; the orb and camera expose descriptive
   labels (gym hours, camera live/offline).
@@ -545,7 +567,7 @@ A Metal-rendered animated field that mirrors the web dashboard's background.
 
 ---
 
-## 15. Build and deploy
+## 16. Build and deploy
 
 The project can be edited on any host; tvOS compilation and signing happen on a
 Mac with Xcode.
@@ -571,7 +593,7 @@ Mac with Xcode.
 
 ---
 
-## 16. Invariants — do not regress
+## 17. Invariants — do not regress
 
 1. **Behaviour parity**: never change user-facing UX or the HA command/`remember`
    shapes unless the web client changes first.
@@ -589,7 +611,7 @@ Mac with Xcode.
 
 ---
 
-## 17. Parked / future work
+## 18. Parked / future work
 
 - **Colour (hue grid) + horizontal brightness** controls live in
   `ParkedControls.swift`, currently unwired. Rework needs a remote-friendly
