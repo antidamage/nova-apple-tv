@@ -5,6 +5,7 @@ import SwiftUI
 final class DashboardStore: ObservableObject {
     @Published var state: DashboardState?
     @Published var theme = DashboardTheme.default
+    @Published private(set) var followVisualizerWhenActive = false
     // Fraction (0..1) of the screen height the horizontal control band occupies.
     // Sourced from the shared theme API's top-level `layout` block so it can be
     // tuned live; defaults to 0.6 so the layout works before the server ships it.
@@ -29,6 +30,9 @@ final class DashboardStore: ObservableObject {
     private let sourceClientID = Int.random(in: 100_000...999_999)
     private var pollingTask: Task<Void, Never>?
     private var orbModulesTask: Task<Void, Never>?
+    private var configuredTheme = DashboardTheme.default
+    private var visualizerColorOverride: DashboardTheme?
+    private var themeTransitionTask: Task<Void, Never>?
 
     var selectedZone: DashboardZone? {
         guard let state else { return nil }
@@ -109,13 +113,62 @@ final class DashboardStore: ObservableObject {
                 return
             }
             let payload = try decoder.decode(SharedThemeResponse.self, from: data)
-            theme = DashboardTheme(sharedTheme: payload.theme?.resolved(sun: sun))
+            configuredTheme = DashboardTheme(sharedTheme: payload.theme?.resolved(sun: sun))
+            followVisualizerWhenActive = payload.followVisualizerWhenActive == true
+            if !followVisualizerWhenActive {
+                visualizerColorOverride = nil
+            }
+            applyCurrentTheme()
             if let fraction = payload.layout?.tvHeightFraction {
                 layoutHeightFraction = clamped(fraction, 0.3, 0.95)
             }
         } catch {
             // Shared theme is cosmetic; keep the last good value.
         }
+    }
+
+    func setVisualizerColorOverride(_ override: DashboardTheme?) {
+        themeTransitionTask?.cancel()
+        themeTransitionTask = nil
+        visualizerColorOverride = followVisualizerWhenActive ? override : nil
+        applyCurrentTheme()
+    }
+
+    func clearVisualizerColorOverride(duration: Double, delay: Double = 0) {
+        themeTransitionTask?.cancel()
+        visualizerColorOverride = nil
+        guard duration > 0, theme != configuredTheme else {
+            theme = configuredTheme
+            return
+        }
+
+        let from = theme
+        let target = configuredTheme
+        themeTransitionTask = Task { [weak self] in
+            if delay > 0 {
+                try? await Task.sleep(for: .seconds(delay))
+                guard !Task.isCancelled else { return }
+            }
+            let started = Date()
+            while !Task.isCancelled {
+                let progress = min(1, Date().timeIntervalSince(started) / duration)
+                let eased = progress * progress * (3 - 2 * progress)
+                self?.theme = from.colorMixed(with: target, amount: eased)
+                if progress >= 1 { break }
+                try? await Task.sleep(for: .milliseconds(33))
+            }
+            guard !Task.isCancelled else { return }
+            self?.theme = target
+            self?.themeTransitionTask = nil
+        }
+    }
+
+    private func applyCurrentTheme() {
+        themeTransitionTask?.cancel()
+        themeTransitionTask = nil
+        theme = visualizerColorOverride.map {
+            configuredTheme.colorMixed(with: $0, amount: 1)
+        } ?? configuredTheme
     }
 
     func sendZoneAction(
@@ -277,6 +330,7 @@ final class DashboardStore: ObservableObject {
 }
 
 struct SharedThemeResponse: Decodable {
+    let followVisualizerWhenActive: Bool?
     let theme: SharedThemePayload?
     let layout: SharedLayoutConfig?
 }
@@ -320,6 +374,11 @@ struct SharedThemePayload: Decodable {
         }
 
         return legacyTheme.hasThemeFields ? legacyTheme : nil
+    }
+
+    func resolved(variant: String) -> SharedDeviceTheme? {
+        guard let themes else { return resolved(sun: nil) }
+        return variant == "light" ? (themes.light ?? themes.dark) : (themes.dark ?? themes.light)
     }
 
     private func resolvedVariant(sun: SunStatus?) -> String {
@@ -586,6 +645,27 @@ struct DashboardAvatarTheme: Equatable {
         )
     }
 
+    func colorMixed(with other: DashboardAvatarTheme, amount: Double) -> DashboardAvatarTheme {
+        let blend = min(1, max(0, amount))
+        return DashboardAvatarTheme(
+            gradientAlert: gradientAlert.mixed(with: other.gradientAlert, amount: blend),
+            gradientCenter: gradientCenter.mixed(with: other.gradientCenter, amount: blend),
+            gradientOuter: gradientOuter.mixed(with: other.gradientOuter, amount: blend),
+            gymAlertThresholdHours: gymAlertThresholdHours,
+            gymNumberColor: gymNumberColor.mixed(with: other.gymNumberColor, amount: blend),
+            gymNumberOpacity: gymNumberOpacity,
+            voiceGlowColor: voiceGlowColor.mixed(with: other.voiceGlowColor, amount: blend),
+            lineColors: lineColors.enumerated().map { index, color in
+                color.mixed(with: index < other.lineColors.count ? other.lineColors[index] : color, amount: blend)
+            },
+            lineOpacities: lineOpacities,
+            innerShadowOpacity: innerShadowOpacity,
+            orbModule: orbModule,
+            orbModuleSettings: orbModuleSettings,
+            glass: glass
+        )
+    }
+
 }
 
 private func normalizeOrbModuleSettings(_ value: [String: [String: Double]]?) -> [String: [String: Double]] {
@@ -818,6 +898,32 @@ struct DashboardTheme: Equatable {
         )
     }
 
+    func mixed(with other: DashboardTheme, amount rawAmount: Double) -> DashboardTheme {
+        let amount = min(1, max(0, rawAmount))
+        func lerp(_ a: Double, _ b: Double) -> Double { a + (b - a) * amount }
+        return DashboardTheme(
+            accent: accent.mixed(with: other.accent, amount: amount),
+            highlight: highlight.mixed(with: other.highlight, amount: amount),
+            background: background.mixed(with: other.background, amount: amount),
+            backgroundEffect: FluidBackgroundSettings(
+                apexGlow: lerp(backgroundEffect.apexGlow, other.backgroundEffect.apexGlow),
+                falloffPower: lerp(backgroundEffect.falloffPower, other.backgroundEffect.falloffPower),
+                hueSpread: lerp(backgroundEffect.hueSpread, other.backgroundEffect.hueSpread),
+                peakIntensity: lerp(backgroundEffect.peakIntensity, other.backgroundEffect.peakIntensity),
+                textureScale: lerp(backgroundEffect.textureScale, other.backgroundEffect.textureScale),
+                textureURL: nil,
+                warpAmplitude: lerp(backgroundEffect.warpAmplitude, other.backgroundEffect.warpAmplitude)
+            ),
+            avatar: amount < 0.5 ? avatar : other.avatar,
+            border: border.mixed(with: other.border, amount: amount),
+            borderOpacity: lerp(borderOpacity, other.borderOpacity),
+            clockColor: clockColor.mixed(with: other.clockColor, amount: amount),
+            titleDark: titleDark.mixed(with: other.titleDark, amount: amount),
+            titleLight: titleLight.mixed(with: other.titleLight, amount: amount),
+            titleTone: amount < 0.5 ? titleTone : other.titleTone
+        )
+    }
+
     var panel: ThemeRGB {
         background.mixed(with: ThemeRGB(red: 0, green: 0, blue: 0), amount: 0.16)
     }
@@ -875,6 +981,26 @@ struct DashboardTheme: Equatable {
             return titleLight
         }
         return rgb.luminance > 0.5 ? titleDark : titleLight
+    }
+
+    /// Blend only colour values. Fonts, sizes, background dynamics, opacity,
+    /// orb module/settings, glass and title-tone behaviour stay on the dashboard
+    /// theme so a visualiser follow is always a temporary palette override.
+    func colorMixed(with other: DashboardTheme, amount rawAmount: Double) -> DashboardTheme {
+        let amount = min(1, max(0, rawAmount))
+        return DashboardTheme(
+            accent: accent.mixed(with: other.accent, amount: amount),
+            highlight: highlight.mixed(with: other.highlight, amount: amount),
+            background: background.mixed(with: other.background, amount: amount),
+            backgroundEffect: backgroundEffect,
+            avatar: avatar.colorMixed(with: other.avatar, amount: amount),
+            border: border.mixed(with: other.border, amount: amount),
+            borderOpacity: borderOpacity,
+            clockColor: clockColor.mixed(with: other.clockColor, amount: amount),
+            titleDark: titleDark.mixed(with: other.titleDark, amount: amount),
+            titleLight: titleLight.mixed(with: other.titleLight, amount: amount),
+            titleTone: titleTone
+        )
     }
 }
 

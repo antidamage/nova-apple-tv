@@ -4,6 +4,8 @@ struct PhonoscopeView: View {
     @EnvironmentObject private var phonoscope: PhonoscopeStore
     @EnvironmentObject private var dashboard: DashboardStore
     @FocusState private var capturesRemote: Bool
+    @FocusState private var housePartyButtonFocused: Bool
+    @State private var showsHousePartyBar = false
     let onBack: () -> Void
 
     var body: some View {
@@ -13,10 +15,11 @@ struct PhonoscopeView: View {
             if usesLetterboxedBackground {
                 GeometryReader { geometry in
                     FluidBackgroundView(
-                        theme: dashboard.theme,
+                        theme: effectiveTheme,
                         baseURL: dashboard.activeBaseURL ?? AppConfig.dashboardBaseURL,
                         blobScale: 4,
-                        blobSoftness: 0.45
+                        blobSoftness: 0.45,
+                        allowsDisplacementTexture: false
                     )
                     .overlay { PhonoscopeEdgeVignette() }
                     .frame(width: geometry.size.width, height: geometry.size.height / 3)
@@ -29,7 +32,9 @@ struct PhonoscopeView: View {
                 module: phonoscope.module,
                 signal: phonoscope.signal,
                 settings: activeSettings,
-                theme: dashboard.theme,
+                theme: effectiveTheme,
+                transitionDuration: phonoscope.settingTransitionSeconds,
+                reloadGeneration: phonoscope.configuration?.moduleReloadGenerations[phonoscope.module?.id ?? ""] ?? 0,
                 letterboxedBackground: usesLetterboxedBackground
             )
             .ignoresSafeArea()
@@ -38,25 +43,69 @@ struct PhonoscopeView: View {
                 statusOverlay
             }
 
+            if let message = phonoscope.configuration?.message?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !message.isEmpty {
+                Text(message)
+                    .font(.novaDisplay(52))
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(effectiveTheme.text)
+                    .lineLimit(3)
+                    .frame(maxWidth: 1_280)
+                    .padding(.horizontal, 80)
+                    .allowsHitTesting(false)
+            }
+
+            if showsHousePartyBar {
+                housePartyBar
+            }
+
             // Keep a real focus target inside the full-screen surface. Without
             // one, tvOS may route Menu/Back to the application lifecycle before
             // the dashboard's parent handler can consume it.
-            Color.white
+            Color.clear
                 .frame(width: 1, height: 1)
-                .opacity(0.001)
+                .contentShape(Rectangle())
                 .focusable(true)
                 .focused($capturesRemote)
+                .onTapGesture {
+                    phonoscope.togglePlayback()
+                }
         }
         .onExitCommand(perform: onBack)
+        .onMoveCommand { direction in
+            if showsHousePartyBar {
+                if direction == .down {
+                    hideHousePartyBar()
+                }
+                return
+            }
+            switch direction {
+            case .left:
+                phonoscope.skipSong(forward: false)
+            case .right:
+                phonoscope.skipSong(forward: true)
+            case .up:
+                showsHousePartyBar = true
+                capturesRemote = false
+                DispatchQueue.main.async {
+                    housePartyButtonFocused = true
+                }
+            default:
+                break
+            }
+        }
         .onAppear {
+            showsHousePartyBar = false
+            phonoscope.setHousePartyEnabled(false, fallbackTheme: effectiveTheme)
             DispatchQueue.main.async {
                 capturesRemote = true
             }
         }
         .task {
-            phonoscope.enter()
+            phonoscope.enter(fallbackTheme: dashboard.theme)
         }
         .onDisappear {
+            phonoscope.setHousePartyEnabled(false, fallbackTheme: effectiveTheme)
             phonoscope.leave()
         }
     }
@@ -69,8 +118,51 @@ struct PhonoscopeView: View {
         return values
     }
 
+    private var effectiveTheme: DashboardTheme {
+        phonoscope.visualizerTheme ?? dashboard.theme
+    }
+
     private var usesLetterboxedBackground: Bool {
         phonoscope.module?.id == "particle-ripples"
+    }
+
+    private var housePartyBar: some View {
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                Button {
+                    phonoscope.setHousePartyEnabled(!phonoscope.housePartyEnabled, fallbackTheme: effectiveTheme)
+                    hideHousePartyBar()
+                } label: {
+                    Text("HOUSE PARTY")
+                        .font(.novaDisplay(32))
+                        .foregroundStyle(Color(white: 0.75))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .tint(housePartyBarColor)
+                .focusEffectDisabled()
+                .focused($housePartyButtonFocused)
+                .accessibilityValue(phonoscope.housePartyEnabled ? "On" : "Off")
+                .frame(height: geometry.size.height * 0.1)
+                .background(housePartyBarColor)
+            }
+        }
+        .ignoresSafeArea()
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    private var housePartyBarColor: Color {
+        Color(red: 0.105, green: 0.11, blue: 0.12)
+    }
+
+    private func hideHousePartyBar() {
+        showsHousePartyBar = false
+        housePartyButtonFocused = false
+        DispatchQueue.main.async {
+            capturesRemote = true
+        }
     }
 
     private var statusOverlay: some View {
