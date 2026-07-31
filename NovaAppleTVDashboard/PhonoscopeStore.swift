@@ -32,9 +32,8 @@ final class PhonoscopeStore: ObservableObject {
     private var themeLibrary: [PhonoscopeThemeLibraryEntry] = []
     private var currentThemeEntry: PhonoscopeThemeGroupEntry?
     private var currentColorThemeID: String?
-    private var themeFrom: DashboardTheme?
     private var themeTarget: DashboardTheme?
-    private var themeTransitionStart = Date()
+    private var lastThemeAdvance = Date()
     private var lastWholeThemeChange = Date()
     private var lastWholeThemeBarIndex = 0
     private var lastVariantBarIndex = 0
@@ -66,8 +65,8 @@ final class PhonoscopeStore: ObservableObject {
     func enter(fallbackTheme: DashboardTheme) {
         guard pollTask == nil else { return }
         housePartyFallbackTheme = fallbackTheme
-        themeFrom = fallbackTheme
         visualizerTheme = fallbackTheme
+        lastThemeAdvance = Date()
         configurationTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refreshConfiguration()
@@ -107,7 +106,6 @@ final class PhonoscopeStore: ObservableObject {
         driverInterpolatedSettingIDs = []
         parameterDriverStates = [:]
         currentThemeVariant = nil
-        themeFrom = nil
         themeTarget = nil
     }
 
@@ -546,7 +544,8 @@ final class PhonoscopeStore: ObservableObject {
     }
 
     var settingTransitionSeconds: Double {
-        if activeColorGroup != nil { return 0.05 }
+        if configuration?.editorPreviewColorThemeId?.isEmpty == false { return 0.05 }
+        if let group = activeColorGroup { return group.transitionSeconds }
         return activeThemeGroup?.transitionSeconds ?? Double(configuration?.transitionMs ?? 600) / 1_000
     }
 
@@ -595,9 +594,7 @@ final class PhonoscopeStore: ObservableObject {
             activeColorTheme = next
             currentThemeBroadcastTransitionSeconds = group.transitionSeconds
             let target = dashboardTheme(for: next)
-            themeFrom = visualizerTheme ?? target
             themeTarget = target
-            themeTransitionStart = Date()
             lastWholeThemeChange = Date()
             lastWholeThemeBarIndex = signal.barIndex
             parameterDriverStates = [:]
@@ -633,9 +630,7 @@ final class PhonoscopeStore: ObservableObject {
               let resolved = saved.themeSet.resolved(variant: next.baseVariant)
         else { return }
         let target = DashboardTheme(sharedTheme: resolved)
-        themeFrom = visualizerTheme ?? target
         themeTarget = target
-        themeTransitionStart = Date()
         lastWholeThemeChange = Date()
         lastWholeThemeBarIndex = signal.barIndex
         lastVariantBarIndex = signal.barIndex
@@ -645,12 +640,16 @@ final class PhonoscopeStore: ObservableObject {
     }
 
     private func advanceTheme() {
+        let now = Date()
+        let delta = max(0, min(0.25, now.timeIntervalSince(lastThemeAdvance)))
+        lastThemeAdvance = now
+        func chase(_ target: DashboardTheme, duration: Double) {
+            let amount = phonoscopeChaseAmount(delta: delta, settlingDuration: duration)
+            visualizerTheme = (visualizerTheme ?? target).mixed(with: target, amount: amount)
+        }
         if let group = activeColorGroup {
             if configuration?.editorPreviewColorThemeId?.isEmpty == false {
-                if let from = themeFrom, let target = themeTarget {
-                    let progress = min(1, Date().timeIntervalSince(themeTransitionStart) / 0.05)
-                    visualizerTheme = from.mixed(with: target, amount: progress)
-                }
+                if let target = themeTarget { chase(target, duration: 0.05) }
                 refreshResolvedSettings()
                 return
             }
@@ -662,12 +661,7 @@ final class PhonoscopeStore: ObservableObject {
                       signal.barIndex != lastWholeThemeBarIndex {
                 selectNextTheme(force: true)
             }
-            if let from = themeFrom, let target = themeTarget {
-                let duration = max(0, group.transitionSeconds)
-                let progress = duration == 0 ? 1 : min(1, Date().timeIntervalSince(themeTransitionStart) / duration)
-                let eased = progress * progress * (3 - 2 * progress)
-                visualizerTheme = from.mixed(with: target, amount: eased)
-            }
+            if let target = themeTarget { chase(target, duration: max(0, group.transitionSeconds)) }
             refreshResolvedSettings()
             return
         }
@@ -680,7 +674,7 @@ final class PhonoscopeStore: ObservableObject {
                   signal.barIndex != lastWholeThemeBarIndex {
             selectNextTheme(force: true)
         }
-        guard let from = themeFrom, var target = themeTarget else { return }
+        guard var target = themeTarget else { return }
         if currentThemeEntry?.swapOnDownbeat == true,
            let entry = currentThemeEntry,
            let saved = themeLibrary.first(where: { $0.id == entry.themeId }),
@@ -722,10 +716,7 @@ final class PhonoscopeStore: ObservableObject {
             currentThemeVariant = currentThemeEntry?.baseVariant
             currentThemeBroadcastTransitionSeconds = group.transitionSeconds
         }
-        let duration = max(0, group.transitionSeconds)
-        let progress = duration == 0 ? 1 : min(1, Date().timeIntervalSince(themeTransitionStart) / duration)
-        let eased = progress * progress * (3 - 2 * progress)
-        visualizerTheme = from.mixed(with: target, amount: eased)
+        chase(target, duration: max(0, currentThemeBroadcastTransitionSeconds))
     }
 
     private func dashboardTheme(for theme: PhonoscopeColorTheme) -> DashboardTheme {
