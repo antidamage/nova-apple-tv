@@ -4,6 +4,9 @@ using namespace metal;
 struct PhonoscopeParticle {
     float4 positionSize;
     float4 color;
+    float4 colorEnd;
+    float4 glowColor;
+    float4 glowColorEnd;
     float4 meta;
     float4 trail;
 };
@@ -19,6 +22,9 @@ struct PhonoscopeVertexOut {
     float4 position [[position]];
     float2 local;
     float4 color;
+    float4 colorEnd;
+    float4 glowColor;
+    float4 glowColorEnd;
     float glow;
     float primitive;
     float material;
@@ -33,6 +39,7 @@ struct PhonoscopeBloomUniforms {
     float2 texelStep;
     float intensity;
     float padding;
+    float4 background;
 };
 
 vertex PhonoscopeVertexOut phonoscope_vertex(
@@ -113,6 +120,9 @@ vertex PhonoscopeVertexOut phonoscope_vertex(
     }
     out.local = corners[vertexID];
     out.color = particle.color;
+    out.colorEnd = particle.colorEnd;
+    out.glowColor = particle.glowColor;
+    out.glowColorEnd = particle.glowColorEnd;
     out.glow = particle.meta.x;
     out.primitive = particle.meta.y;
     out.material = particle.meta.z;
@@ -121,6 +131,7 @@ vertex PhonoscopeVertexOut phonoscope_vertex(
 
 fragment float4 phonoscope_fragment(PhonoscopeVertexOut in [[stage_in]]) {
     float radius = length(in.local);
+    float gradientProgress = clamp(radius, 0.0, 1.0);
     float core;
     float halo;
     if (in.primitive < 0.5) {
@@ -145,10 +156,15 @@ fragment float4 phonoscope_fragment(PhonoscopeVertexOut in [[stage_in]]) {
         halo = exp(-radius * radius * 3.2) * in.glow;
     } else if (in.primitive < 5.5) {
         float progress = clamp((in.local.x + 1.0) * 0.5, 0.0, 1.0);
+        // A trail starts at the dot (the quad's head at progress 1) and ends
+        // at its tail, so Primary remains the start colour.
+        gradientProgress = 1.0 - progress;
         float brightness = pow(progress, 1.45);
         core = smoothstep(1.0, 0.08, abs(in.local.y)) * brightness;
         halo = exp(-in.local.y * in.local.y * 3.2) * in.glow * brightness;
     } else {
+        // Grid wires are emitted source-to-destination.
+        gradientProgress = clamp((in.local.x + 1.0) * 0.5, 0.0, 1.0);
         core = smoothstep(1.0, 0.2, abs(in.local.y));
         halo = 0.0;
     }
@@ -157,9 +173,17 @@ fragment float4 phonoscope_fragment(PhonoscopeVertexOut in [[stage_in]]) {
         float z = sqrt(max(0.0, 1.0 - radius * radius));
         lighting = 0.28 + 0.72 * max(0.0, dot(normalize(float3(in.local, z)), normalize(float3(-0.35, 0.45, 1.0))));
     }
-    float alpha = clamp(in.color.a * (core + halo * 0.38), 0.0, 1.0);
-    float3 rgb = in.color.rgb * (core * lighting + halo);
-    return float4(rgb * alpha, alpha);
+    // All shader output is premultiplied because the Metal pipelines use
+    // source-one blending. Slot opacity therefore affects both energy and
+    // coverage without changing the selected hue.
+    float4 coreColor = mix(in.color, in.colorEnd, gradientProgress);
+    float4 glowColor = mix(in.glowColor, in.glowColorEnd, gradientProgress);
+    float coreAlpha = coreColor.a * core;
+    float glowAlpha = glowColor.a * halo * 0.38;
+    float alpha = clamp(coreAlpha + glowAlpha, 0.0, 1.0);
+    float3 rgb = coreColor.rgb * coreAlpha * lighting
+        + glowColor.rgb * glowAlpha;
+    return float4(rgb, alpha);
 }
 
 vertex PhonoscopeFullscreenOut phonoscope_fullscreen_vertex(uint vertexID [[vertex_id]]) {
@@ -213,7 +237,11 @@ fragment float4 phonoscope_composite(
     constexpr sampler linearSampler(address::clamp_to_edge, filter::linear);
     float4 base = scene.sample(linearSampler, in.uv);
     float4 glow = bloom.sample(linearSampler, in.uv) * uniforms.intensity;
-    float3 color = clamp(base.rgb + glow.rgb, 0.0, 1.0);
-    float alpha = clamp(max(base.a, max(glow.a, max(color.r, max(color.g, color.b)))), 0.0, 1.0);
-    return float4(color, alpha);
+    float3 foreground = base.rgb + glow.rgb;
+    float foregroundAlpha = clamp(max(base.a, glow.a), 0.0, 1.0);
+    float backgroundAlpha = clamp(uniforms.background.a, 0.0, 1.0);
+    float3 color = foreground
+        + uniforms.background.rgb * backgroundAlpha * (1.0 - foregroundAlpha);
+    float alpha = foregroundAlpha + backgroundAlpha * (1.0 - foregroundAlpha);
+    return float4(clamp(color, 0.0, 1.0), clamp(alpha, 0.0, 1.0));
 }
