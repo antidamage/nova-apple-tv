@@ -191,15 +191,11 @@ enum ParitySelfTests {
             isDriverInterpolated: false
         ) == .hold)
 
-        let transition = PhonoscopeSettingTransition(
-            start: 0,
-            target: 10,
-            startedAt: 20,
-            duration: 2
-        )
-        assert(transition.value(at: 20) == 0)
-        assert(transition.value(at: 21) == 5)
-        assert(transition.value(at: 22) == 10)
+        assert(phonoscopeChaseAmount(delta: 1, settlingDuration: 0) == 1)
+        let oneThird = phonoscopeChaseAmount(delta: 1, settlingDuration: 3)
+        assert(abs(oneThird - (1 - exp(-1.0))) < 0.000_001)
+        let settled = phonoscopeChaseAmount(delta: 3, settlingDuration: 3)
+        assert(settled > 0.95 && settled < 1)
     }
 
     private static func testRootBackExitGate() {

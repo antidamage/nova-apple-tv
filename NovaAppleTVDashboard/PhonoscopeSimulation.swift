@@ -26,6 +26,19 @@ struct PhonoscopePalette: Equatable {
         return fallback ?? accent
     }
 
+    func approached(toward target: PhonoscopePalette, amount rawAmount: Double) -> PhonoscopePalette {
+        let amount = Float(min(1, max(0, rawAmount)))
+        let keys = Set(colors.keys).union(target.colors.keys)
+        return PhonoscopePalette(colors: Dictionary(uniqueKeysWithValues: keys.map { key in
+            let current = colors[key]
+                ?? target.colors[key].map { SIMD4($0.x, $0.y, $0.z, 0) }
+                ?? .zero
+            let destination = target.colors[key]
+                ?? SIMD4(current.x, current.y, current.z, 0)
+            return (key, simd_mix(current, destination, SIMD4<Float>(repeating: amount)))
+        }))
+    }
+
     static let `default` = PhonoscopePalette(
         colors: [
             "primary": SIMD4(0.45, 0.45, 0.45, 1),
@@ -132,21 +145,11 @@ private struct PhonoscopeEmitter {
     var emitted: Int
 }
 
-struct PhonoscopeSettingTransition: Equatable {
-    let start: Double
-    let target: Double
-    let startedAt: CFTimeInterval
-    let duration: Double
-
-    func value(at time: CFTimeInterval) -> Double {
-        let amount = duration == 0 ? 1 : min(1, max(0, (time - startedAt) / duration))
-        let eased = amount * amount * (3 - 2 * amount)
-        return start + (target - start) * eased
-    }
-
-    func isComplete(at time: CFTimeInterval) -> Bool {
-        duration == 0 || time - startedAt >= duration
-    }
+func phonoscopeChaseAmount(delta: Double, settlingDuration: Double) -> Double {
+    guard settlingDuration > 0 else { return 1 }
+    // Three time constants settle to roughly 95%. Unlike a fixed endpoint
+    // tween, this response can be retargeted every frame without a jump.
+    return 1 - exp(-3 * max(0, delta) / settlingDuration)
 }
 
 enum PhonoscopeSettingInterpolationAction: Equatable {
@@ -187,9 +190,10 @@ final class PhonoscopeSimulation {
     private var signal = PhonoscopeSignalFrame.idle
     private var settings: [String: Double] = [:]
     private var palette = PhonoscopePalette.default
+    private var targetPalette = PhonoscopePalette.default
     private var targetSettings: [String: Double] = [:]
     private var driverInterpolatedSettings: Set<String> = []
-    private var settingTransitions: [String: PhonoscopeSettingTransition] = [:]
+    private var transitionDuration: Double = 0.6
     private var reloadGeneration = 0
     private var moduleKey = ""
     private var entities: [PhonoscopeSimEntity] = []
@@ -259,7 +263,6 @@ final class PhonoscopeSimulation {
         let nextKey = pendingModuleKey
         inputLock.unlock()
         let requiresRebuild = nextKey != moduleKey || nextReloadGeneration != reloadGeneration
-        let now = CACurrentMediaTime()
         if !requiresRebuild {
             for (key, target) in nextSettings {
                 let action = phonoscopeSettingInterpolationAction(
@@ -269,26 +272,18 @@ final class PhonoscopeSimulation {
                 )
                 if action == .applyImmediately {
                     settings[key] = target
-                    settingTransitions.removeValue(forKey: key)
-                    continue
-                }
-                if action == .transition {
-                    settingTransitions[key] = PhonoscopeSettingTransition(
-                        start: settings[key] ?? targetSettings[key] ?? target,
-                        target: target,
-                        startedAt: now,
-                        duration: nextTransitionDuration
-                    )
+                } else if settings[key] == nil {
+                    settings[key] = target
                 }
             }
             for key in Array(settings.keys) where nextSettings[key] == nil {
                 settings.removeValue(forKey: key)
-                settingTransitions.removeValue(forKey: key)
             }
         }
         targetSettings = nextSettings
         driverInterpolatedSettings = nextDriverInterpolatedSettings
-        palette = nextPalette
+        targetPalette = nextPalette
+        transitionDuration = nextTransitionDuration
         moduleKey = nextKey
         module = nextModule
         reloadGeneration = nextReloadGeneration
@@ -296,8 +291,7 @@ final class PhonoscopeSimulation {
             settings = nextSettings
             targetSettings = nextSettings
             driverInterpolatedSettings = nextDriverInterpolatedSettings
-            settingTransitions.removeAll(keepingCapacity: true)
-            palette = nextPalette
+            targetPalette = nextPalette
             rebuild()
         }
         signal = nextSignal
@@ -314,7 +308,7 @@ final class PhonoscopeSimulation {
             let now = CACurrentMediaTime()
             let dt = Float(min(1.0 / 30.0, max(1.0 / 120.0, now - lastTick)))
             lastTick = now
-            advanceConfiguration(now: now)
+            advanceConfiguration(delta: Double(dt))
             advanceSignal(by: Double(dt))
             var diagnostics = PhonoscopeDiagnostics()
 
@@ -332,17 +326,12 @@ final class PhonoscopeSimulation {
         }
     }
 
-    private func advanceConfiguration(now: CFTimeInterval) {
-        var completed: [String] = []
-        for (key, transition) in settingTransitions {
-            settings[key] = transition.value(at: now)
-            if transition.isComplete(at: now) {
-                settings[key] = transition.target
-                completed.append(key)
-            }
-        }
-        for key in completed {
-            settingTransitions.removeValue(forKey: key)
+    private func advanceConfiguration(delta: Double) {
+        let amount = phonoscopeChaseAmount(delta: delta, settlingDuration: transitionDuration)
+        palette = palette.approached(toward: targetPalette, amount: amount)
+        for (key, target) in targetSettings where !driverInterpolatedSettings.contains(key) {
+            let current = settings[key] ?? target
+            settings[key] = current + (target - current) * amount
         }
         if module?.id == "particle-ripples" {
             let threshold = Float(settings["peak_threshold"] ?? 0.28)

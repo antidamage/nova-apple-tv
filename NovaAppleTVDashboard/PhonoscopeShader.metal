@@ -165,7 +165,18 @@ fragment float4 phonoscope_fragment(PhonoscopeVertexOut in [[stage_in]]) {
     } else {
         // Grid wires are emitted source-to-destination.
         gradientProgress = clamp((in.local.x + 1.0) * 0.5, 0.0, 1.0);
-        core = smoothstep(1.0, 0.2, abs(in.local.y));
+        // The wire is an alpha-shaped quad, so MSAA alone only smooths the
+        // quad's geometry and cannot reliably soften this shader-defined
+        // boundary. Convert one screen pixel into local coordinates with
+        // fwidth and integrate coverage across that edge. This remains visible
+        // when adaptive rendering drops the scene to a single sample.
+        float signedEdgeDistance = 1.0 - abs(in.local.y);
+        float edgePixelWidth = max(fwidth(in.local.y), 0.0001);
+        core = smoothstep(
+            -edgePixelWidth * 0.5,
+            edgePixelWidth * 0.5,
+            signedEdgeDistance
+        );
         halo = 0.0;
     }
     float lighting = 1.0;
