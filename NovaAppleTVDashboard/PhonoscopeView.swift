@@ -32,7 +32,10 @@ struct PhonoscopeView: View {
                 module: phonoscope.module,
                 signal: phonoscope.signal,
                 settings: activeSettings,
+                driverInterpolatedSettings: phonoscope.driverInterpolatedSettingIDs,
                 theme: effectiveTheme,
+                paletteColors: phonoscope.activeColorTheme?.colors.mapValues(\.vector) ?? [:],
+                quality: phonoscope.configuration?.quality ?? "auto",
                 transitionDuration: phonoscope.settingTransitionSeconds,
                 reloadGeneration: phonoscope.configuration?.moduleReloadGenerations[phonoscope.module?.id ?? ""] ?? 0,
                 letterboxedBackground: usesLetterboxedBackground
@@ -48,7 +51,8 @@ struct PhonoscopeView: View {
                 Text(message)
                     .font(.novaDisplay(52))
                     .multilineTextAlignment(.center)
-                    .foregroundStyle(effectiveTheme.text)
+                    .foregroundStyle(effectiveTheme.clockText)
+                    .opacity(visualiserOpacity("primaryText"))
                     .lineLimit(3)
                     .frame(maxWidth: 1_280)
                     .padding(.horizontal, 80)
@@ -112,6 +116,9 @@ struct PhonoscopeView: View {
 
     private var activeSettings: [String: Double] {
         guard let module = phonoscope.module else { return [:] }
+        if !phonoscope.resolvedModuleSettings.isEmpty {
+            return phonoscope.resolvedModuleSettings
+        }
         var values = Dictionary(uniqueKeysWithValues: module.settings.map { ($0.id, $0.default) })
         let configured = phonoscope.configuration?.moduleSettings[module.id] ?? [:]
         values.merge(configured) { _, configured in configured }
@@ -175,11 +182,11 @@ struct PhonoscopeView: View {
                         .font(.custom("Rajdhani-SemiBold", size: 28))
                     Text(trackDetail)
                         .font(.custom("ShareTechMono-Regular", size: 16))
-                        .foregroundStyle(.white.opacity(0.62))
+                        .foregroundStyle(effectiveTheme.titleLight.color.opacity(0.72))
                     if !phonoscope.signal.lyricCurrent.isEmpty {
                         Text(phonoscope.signal.lyricCurrent)
                             .font(.custom("Rajdhani-Medium", size: 22))
-                            .foregroundStyle(.white.opacity(0.82))
+                            .foregroundStyle(effectiveTheme.titleLight.color)
                             .lineLimit(1)
                             .padding(.top, 5)
                     }
@@ -190,7 +197,7 @@ struct PhonoscopeView: View {
                 VStack(alignment: .trailing, spacing: 4) {
                     Text(phonoscope.module?.name.uppercased() ?? "LOADING MODULE")
                     Text(phonoscope.status)
-                        .foregroundStyle(.white.opacity(0.58))
+                        .foregroundStyle(effectiveTheme.titleLight.color.opacity(0.68))
                     if let error = phonoscope.errorMessage {
                         Text(error)
                             .foregroundStyle(.orange.opacity(0.9))
@@ -201,8 +208,13 @@ struct PhonoscopeView: View {
             .padding(.horizontal, 48)
             .padding(.bottom, 34)
         }
-        .foregroundStyle(.white.opacity(0.9))
+        .foregroundStyle(effectiveTheme.titleLight.color)
+        .opacity(visualiserOpacity("secondaryText"))
         .allowsHitTesting(false)
+    }
+
+    private func visualiserOpacity(_ slot: String) -> Double {
+        max(0, min(100, phonoscope.activeColorTheme?.colors[slot]?.opacity ?? 100)) / 100
     }
 
     private var trackDetail: String {

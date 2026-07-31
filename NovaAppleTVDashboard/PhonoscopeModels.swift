@@ -77,6 +77,12 @@ struct PhonoscopeModuleSetting: Decodable, Equatable {
     let updateMode: String?
 }
 
+struct PhonoscopePaletteSlot: Decodable, Equatable {
+    let id: String
+    let label: String
+    let defaultRgb: [Double]
+}
+
 struct PhonoscopeBoundary: Decodable, Equatable {
     let mode: String
     let restitution: Double
@@ -105,6 +111,7 @@ struct PhonoscopeModule: Decodable, Equatable {
     let bounds: PhonoscopeBounds
     let boundary: PhonoscopeBoundary
     let settings: [PhonoscopeModuleSetting]
+    let paletteSlots: [PhonoscopePaletteSlot]?
     let templates: [String: PhonoscopeJSONValue]
     let scene: [PhonoscopeJSONValue]
     let resources: PhonoscopeResources
@@ -143,6 +150,7 @@ struct PhonoscopeModuleSummary: Decodable, Equatable, Identifiable {
     let hash: String
     let builtin: Bool
     let settings: [PhonoscopeModuleSetting]
+    let paletteSlots: [PhonoscopePaletteSlot]?
 }
 
 struct PhonoscopeProviderConfig: Decodable, Equatable {
@@ -160,10 +168,72 @@ struct PhonoscopeConfiguration: Decodable, Equatable {
     let transitionMs: Int
     let providers: PhonoscopeProviderConfig
     let moduleSettings: [String: [String: Double]]
+    let moduleParameterSources: [String: [String: PhonoscopeParameterSource]]?
     let pendingStructuralModuleSettings: [String: [String: Double]]
     let moduleReloadGenerations: [String: Int]
-    let themeGroups: [PhonoscopeThemeGroup]
-    let moduleThemeGroupIds: [String: String]
+    let colorGroups: [PhonoscopeColorGroup]?
+    let moduleColorGroupIds: [String: String]?
+    let editorPreviewColorGroupId: String?
+    let editorPreviewColorThemeId: String?
+    let themeGroups: [PhonoscopeThemeGroup]?
+    let moduleThemeGroupIds: [String: String]?
+}
+
+struct PhonoscopeColorValue: Decodable, Equatable {
+    let rgb: [Double]
+    let intensity: Double
+    let opacity: Double?
+
+    var themeRGB: ThemeRGB {
+        let scale = max(0, min(100, intensity)) / 100
+        return ThemeRGB(
+            red: max(0, min(255, rgb[safe: 0] ?? 0)) * scale,
+            green: max(0, min(255, rgb[safe: 1] ?? 0)) * scale,
+            blue: max(0, min(255, rgb[safe: 2] ?? 0)) * scale
+        )
+    }
+
+    var vector: SIMD4<Float> {
+        let color = themeRGB
+        return SIMD4(
+            Float(color.red / 255),
+            Float(color.green / 255),
+            Float(color.blue / 255),
+            Float(max(0, min(100, opacity ?? 100)) / 100)
+        )
+    }
+}
+
+struct PhonoscopeParameterSource: Decodable, Equatable {
+    let type: String
+    let value: Double?
+    let min: Double?
+    let max: Double?
+    let cadence: String?
+    let intervalSeconds: Double?
+    let transitionSeconds: Double?
+    let attackSeconds: Double?
+    let releaseSeconds: Double?
+}
+
+struct PhonoscopeColorTheme: Decodable, Equatable {
+    let id: String
+    let name: String
+    let colors: [String: PhonoscopeColorValue]
+    let parameterOverrides: [String: [String: PhonoscopeParameterSource]]
+}
+
+struct PhonoscopeColorGroup: Decodable, Equatable {
+    let id: String
+    let moduleId: String
+    let name: String
+    let themes: [PhonoscopeColorTheme]
+    let order: String
+    let changeMode: String
+    let waitSeconds: Double
+    let transitionSeconds: Double
+    let housePartyHueMode: String
+    let housePartyBrightnessMode: String
 }
 
 struct PhonoscopeThemeGroupEntry: Decodable, Equatable {
@@ -203,6 +273,8 @@ struct HousePartyFramePayload: Encodable {
     let themeId: String?
     let themeVariant: String?
     let themeTransitionSeconds: Double
+    let colorThemeId: String?
+    let palette: [String: [Int]]?
     let clock: HousePartyMasterClockPayload?
 }
 
@@ -333,6 +405,9 @@ struct PhonoscopeSignalFrame: Equatable, Sendable {
 struct PhonoscopeRenderParticle {
     var position: SIMD3<Float>
     var color: SIMD4<Float>
+    var colorEnd: SIMD4<Float>
+    var glowColor: SIMD4<Float>
+    var glowColorEnd: SIMD4<Float>
     var size: Float
     var glow: Float
     var primitive: Float

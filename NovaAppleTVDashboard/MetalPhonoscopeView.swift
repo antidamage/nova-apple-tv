@@ -1,9 +1,28 @@
 import MetalKit
 import SwiftUI
 
+func phonoscopeAASampleCount(
+    quality: String,
+    renderScale: CGFloat,
+    supportsFourSamples: Bool
+) -> Int {
+    guard supportsFourSamples else { return 1 }
+    switch quality.lowercased() {
+    case "high":
+        return 4
+    case "auto":
+        return renderScale >= 0.999 ? 4 : 1
+    default:
+        return 1
+    }
+}
+
 private struct PhonoscopeGPUParticle {
     var positionSize: SIMD4<Float>
     var color: SIMD4<Float>
+    var colorEnd: SIMD4<Float>
+    var glowColor: SIMD4<Float>
+    var glowColorEnd: SIMD4<Float>
     var meta: SIMD4<Float>
     var trail: SIMD4<Float>
 }
@@ -19,13 +38,17 @@ private struct PhonoscopeBloomUniforms {
     var texelStep: SIMD2<Float>
     var intensity: Float
     var padding: Float = 0
+    var background: SIMD4<Float> = .zero
 }
 
 struct MetalPhonoscopeView: UIViewRepresentable {
     let module: PhonoscopeModule?
     let signal: PhonoscopeSignalFrame
     let settings: [String: Double]
+    let driverInterpolatedSettings: Set<String>
     let theme: DashboardTheme
+    let paletteColors: [String: SIMD4<Float>]
+    let quality: String
     let transitionDuration: Double
     let reloadGeneration: Int
     let letterboxedBackground: Bool
@@ -54,11 +77,13 @@ struct MetalPhonoscopeView: UIViewRepresentable {
         view.delegate = renderer
         renderer.view = view
         renderer.letterboxedBackground = letterboxedBackground
+        renderer.quality = quality
         context.coordinator.simulation.start()
         context.coordinator.simulation.update(
             module: module,
             signal: signal,
             settings: settings,
+            driverInterpolatedSettings: driverInterpolatedSettings,
             palette: palette,
             transitionDuration: transitionDuration,
             reloadGeneration: reloadGeneration
@@ -68,6 +93,7 @@ struct MetalPhonoscopeView: UIViewRepresentable {
 
     func updateUIView(_ uiView: UIView, context: Context) {
         context.coordinator.renderer?.letterboxedBackground = letterboxedBackground
+        context.coordinator.renderer?.quality = quality
         if let view = uiView as? MTKView {
             view.isOpaque = !letterboxedBackground
             view.backgroundColor = letterboxedBackground ? .clear : .black
@@ -76,6 +102,7 @@ struct MetalPhonoscopeView: UIViewRepresentable {
             module: module,
             signal: signal,
             settings: settings,
+            driverInterpolatedSettings: driverInterpolatedSettings,
             palette: palette,
             transitionDuration: transitionDuration,
             reloadGeneration: reloadGeneration
@@ -83,11 +110,11 @@ struct MetalPhonoscopeView: UIViewRepresentable {
     }
 
     private var palette: PhonoscopePalette {
-        PhonoscopePalette(
-            accent: theme.accent.vector,
-            highlight: theme.highlight.vector,
-            background: theme.background.vector
-        )
+        var colors = paletteColors
+        if colors["primary"] == nil { colors["primary"] = theme.accent.vector }
+        if colors["secondary"] == nil { colors["secondary"] = theme.highlight.vector }
+        if colors["background"] == nil { colors["background"] = theme.background.vector }
+        return PhonoscopePalette(colors: colors)
     }
 
     static func dismantleUIView(_ uiView: UIView, coordinator: MetalPhonoscopeCoordinator) {
@@ -115,12 +142,14 @@ final class MetalPhonoscopeRenderer: NSObject, MTKViewDelegate {
     private let simulation: PhonoscopeSimulation
     private let commandQueue: MTLCommandQueue
     private let particlePipeline: MTLRenderPipelineState
+    private let particleAAPipeline: MTLRenderPipelineState?
     private let bloomExtractPipeline: MTLRenderPipelineState
     private let bloomBlurPipeline: MTLRenderPipelineState
     private let compositePipeline: MTLRenderPipelineState
     private var particleBuffer: MTLBuffer?
     private var particleCapacity = 0
     private var hdrTexture: MTLTexture?
+    private var multisampleHDRTexture: MTLTexture?
     private var bloomTextureA: MTLTexture?
     private var bloomTextureB: MTLTexture?
     private var renderTargetSize = MTLSize()
@@ -131,6 +160,7 @@ final class MetalPhonoscopeRenderer: NSObject, MTKViewDelegate {
     private var fastFrames = 0
     private var renderScale: CGFloat = 1
     var letterboxedBackground = false
+    var quality = "auto"
 
     init?(device: MTLDevice, simulation: PhonoscopeSimulation) {
         self.device = device
@@ -146,15 +176,19 @@ final class MetalPhonoscopeRenderer: NSObject, MTKViewDelegate {
         else { return nil }
         commandQueue = queue
 
-        let particleDescriptor = MTLRenderPipelineDescriptor()
-        particleDescriptor.vertexFunction = vertex
-        particleDescriptor.fragmentFunction = fragment
-        particleDescriptor.colorAttachments[0].pixelFormat = .rgba16Float
-        particleDescriptor.colorAttachments[0].isBlendingEnabled = true
-        particleDescriptor.colorAttachments[0].sourceRGBBlendFactor = .one
-        particleDescriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
-        particleDescriptor.colorAttachments[0].sourceAlphaBlendFactor = .one
-        particleDescriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        func particleDescriptor(sampleCount: Int) -> MTLRenderPipelineDescriptor {
+            let descriptor = MTLRenderPipelineDescriptor()
+            descriptor.vertexFunction = vertex
+            descriptor.fragmentFunction = fragment
+            descriptor.rasterSampleCount = sampleCount
+            descriptor.colorAttachments[0].pixelFormat = .rgba16Float
+            descriptor.colorAttachments[0].isBlendingEnabled = true
+            descriptor.colorAttachments[0].sourceRGBBlendFactor = .one
+            descriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
+            descriptor.colorAttachments[0].sourceAlphaBlendFactor = .one
+            descriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
+            return descriptor
+        }
 
         func fullscreenDescriptor(fragment: MTLFunction, format: MTLPixelFormat) -> MTLRenderPipelineDescriptor {
             let descriptor = MTLRenderPipelineDescriptor()
@@ -173,7 +207,12 @@ final class MetalPhonoscopeRenderer: NSObject, MTKViewDelegate {
         compositeDescriptor.colorAttachments[0].sourceAlphaBlendFactor = .one
         compositeDescriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
         do {
-            particlePipeline = try device.makeRenderPipelineState(descriptor: particleDescriptor)
+            particlePipeline = try device.makeRenderPipelineState(
+                descriptor: particleDescriptor(sampleCount: 1)
+            )
+            particleAAPipeline = device.supportsTextureSampleCount(4)
+                ? try device.makeRenderPipelineState(descriptor: particleDescriptor(sampleCount: 4))
+                : nil
             bloomExtractPipeline = try device.makeRenderPipelineState(descriptor: extractDescriptor)
             bloomBlurPipeline = try device.makeRenderPipelineState(descriptor: blurDescriptor)
             compositePipeline = try device.makeRenderPipelineState(descriptor: compositeDescriptor)
@@ -194,6 +233,9 @@ final class MetalPhonoscopeRenderer: NSObject, MTKViewDelegate {
                 PhonoscopeGPUParticle(
                     positionSize: SIMD4($0.position.x, $0.position.y, $0.position.z, $0.size),
                     color: $0.color,
+                    colorEnd: $0.colorEnd,
+                    glowColor: $0.glowColor,
+                    glowColorEnd: $0.glowColorEnd,
                     meta: SIMD4($0.glow, $0.primitive, $0.material, 0),
                     trail: SIMD4(
                         $0.trailDirection.x,
@@ -217,7 +259,7 @@ final class MetalPhonoscopeRenderer: NSObject, MTKViewDelegate {
                     red: Double(next.background.x),
                     green: Double(next.background.y),
                     blue: Double(next.background.z),
-                    alpha: 1
+                    alpha: Double(next.background.w)
                 )
         }
 
@@ -229,8 +271,18 @@ final class MetalPhonoscopeRenderer: NSObject, MTKViewDelegate {
               let commandBuffer = commandQueue.makeCommandBuffer()
         else { return }
 
-        ensureRenderTargets(width: drawable.texture.width, height: drawable.texture.height)
+        let sampleCount = phonoscopeAASampleCount(
+            quality: quality,
+            renderScale: renderScale,
+            supportsFourSamples: particleAAPipeline != nil
+        )
+        ensureRenderTargets(
+            width: drawable.texture.width,
+            height: drawable.texture.height,
+            sampleCount: sampleCount
+        )
         guard let hdrTexture, let bloomTextureA, let bloomTextureB else { return }
+        let activeSampleCount = sampleCount == 4 && multisampleHDRTexture != nil ? 4 : 1
 
         var uniforms = PhonoscopeGPUUniforms(
             viewport: SIMD4(Float(view.drawableSize.width), Float(view.drawableSize.height), Float(renderScale), 0),
@@ -240,19 +292,22 @@ final class MetalPhonoscopeRenderer: NSObject, MTKViewDelegate {
         )
 
         let particlePass = MTLRenderPassDescriptor()
-        particlePass.colorAttachments[0].texture = hdrTexture
+        if activeSampleCount == 4, let multisampleHDRTexture, particleAAPipeline != nil {
+            particlePass.colorAttachments[0].texture = multisampleHDRTexture
+            particlePass.colorAttachments[0].resolveTexture = hdrTexture
+            particlePass.colorAttachments[0].storeAction = .multisampleResolve
+        } else {
+            particlePass.colorAttachments[0].texture = hdrTexture
+            particlePass.colorAttachments[0].storeAction = .store
+        }
         particlePass.colorAttachments[0].loadAction = .clear
-        particlePass.colorAttachments[0].storeAction = .store
-        particlePass.colorAttachments[0].clearColor = letterboxedBackground
-            ? MTLClearColorMake(0, 0, 0, 0)
-            : MTLClearColor(
-                red: Double(snapshot.background.x),
-                green: Double(snapshot.background.y),
-                blue: Double(snapshot.background.z),
-                alpha: 1
-            )
+        // Keep the emissive scene transparent so the background colour cannot
+        // leak into bloom extraction. The composite pass adds it afterwards.
+        particlePass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
         guard let particleEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: particlePass) else { return }
-        particleEncoder.setRenderPipelineState(particlePipeline)
+        particleEncoder.setRenderPipelineState(
+            activeSampleCount == 4 ? (particleAAPipeline ?? particlePipeline) : particlePipeline
+        )
         particleEncoder.setVertexBuffer(particleBuffer, offset: 0, index: 0)
         particleEncoder.setVertexBytes(&uniforms, length: MemoryLayout<PhonoscopeGPUUniforms>.stride, index: 1)
         particleEncoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: particles.count)
@@ -289,7 +344,11 @@ final class MetalPhonoscopeRenderer: NSObject, MTKViewDelegate {
         )
 
         guard let compositeEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: drawableDescriptor) else { return }
-        var compositeUniforms = PhonoscopeBloomUniforms(texelStep: .zero, intensity: 1.45)
+        var compositeUniforms = PhonoscopeBloomUniforms(
+            texelStep: .zero,
+            intensity: 1.45,
+            background: letterboxedBackground ? .zero : snapshot.background
+        )
         compositeEncoder.setRenderPipelineState(compositePipeline)
         compositeEncoder.setFragmentTexture(hdrTexture, index: 0)
         compositeEncoder.setFragmentTexture(bloomTextureA, index: 1)
@@ -334,12 +393,13 @@ final class MetalPhonoscopeRenderer: NSObject, MTKViewDelegate {
         encoder.endEncoding()
     }
 
-    private func ensureRenderTargets(width: Int, height: Int) {
+    private func ensureRenderTargets(width: Int, height: Int, sampleCount: Int) {
         let nextSize = MTLSize(width: width, height: height, depth: 1)
-        guard nextSize.width != renderTargetSize.width
+        let sizeChanged = nextSize.width != renderTargetSize.width
                 || nextSize.height != renderTargetSize.height
                 || nextSize.depth != renderTargetSize.depth
-        else { return }
+        let needsMultisampleTexture = sampleCount == 4 && multisampleHDRTexture == nil
+        guard sizeChanged || needsMultisampleTexture else { return }
         renderTargetSize = nextSize
 
         func texture(width: Int, height: Int) -> MTLTexture? {
@@ -357,6 +417,19 @@ final class MetalPhonoscopeRenderer: NSObject, MTKViewDelegate {
         hdrTexture = texture(width: width, height: height)
         bloomTextureA = texture(width: width / 4, height: height / 4)
         bloomTextureB = texture(width: width / 4, height: height / 4)
+        if sampleCount == 4 {
+            let descriptor = MTLTextureDescriptor()
+            descriptor.textureType = .type2DMultisample
+            descriptor.pixelFormat = .rgba16Float
+            descriptor.width = max(1, width)
+            descriptor.height = max(1, height)
+            descriptor.sampleCount = 4
+            descriptor.storageMode = .private
+            descriptor.usage = [.renderTarget]
+            multisampleHDRTexture = device.makeTexture(descriptor: descriptor)
+        } else if sizeChanged {
+            multisampleHDRTexture = nil
+        }
     }
 
     private func ensureParticleCapacity(_ count: Int) {

@@ -12,6 +12,9 @@ final class PhonoscopeStore: ObservableObject {
     @Published private(set) var status = "AMBIENT"
     @Published private(set) var errorMessage: String?
     @Published private(set) var visualizerTheme: DashboardTheme?
+    @Published private(set) var activeColorTheme: PhonoscopeColorTheme?
+    @Published private(set) var resolvedModuleSettings: [String: Double] = [:]
+    @Published private(set) var driverInterpolatedSettingIDs: Set<String> = []
     @Published private(set) var housePartyEnabled = false
 
     private let decoder = JSONDecoder()
@@ -28,6 +31,7 @@ final class PhonoscopeStore: ObservableObject {
     private var etag: String?
     private var themeLibrary: [PhonoscopeThemeLibraryEntry] = []
     private var currentThemeEntry: PhonoscopeThemeGroupEntry?
+    private var currentColorThemeID: String?
     private var themeFrom: DashboardTheme?
     private var themeTarget: DashboardTheme?
     private var themeTransitionStart = Date()
@@ -51,9 +55,17 @@ final class PhonoscopeStore: ObservableObject {
     private var housePartyImmediatePending = false
     private var housePartyForcePending = false
     private var songSkipInFlight = false
+    private struct ParameterDriverState {
+        var current: Double
+        var target: Double
+        var eventKey: String
+        var lastUpdated: Date
+    }
+    private var parameterDriverStates: [String: ParameterDriverState] = [:]
 
     func enter(fallbackTheme: DashboardTheme) {
         guard pollTask == nil else { return }
+        housePartyFallbackTheme = fallbackTheme
         themeFrom = fallbackTheme
         visualizerTheme = fallbackTheme
         configurationTask = Task { [weak self] in
@@ -89,6 +101,11 @@ final class PhonoscopeStore: ObservableObject {
         themeTask = nil
         housePartyTask = nil
         currentThemeEntry = nil
+        currentColorThemeID = nil
+        activeColorTheme = nil
+        resolvedModuleSettings = [:]
+        driverInterpolatedSettingIDs = []
+        parameterDriverStates = [:]
         currentThemeVariant = nil
         themeFrom = nil
         themeTarget = nil
@@ -240,19 +257,32 @@ final class PhonoscopeStore: ObservableObject {
             Int(backgroundAverage.green.rounded()),
             Int(backgroundAverage.blue.rounded()),
         ]
-        let group = activeThemeGroup
+        let legacyGroup = activeThemeGroup
+        let colorGroup = activeColorGroup
+        let palette = activeColorTheme.map { theme in
+            Dictionary(uniqueKeysWithValues: theme.colors.map { key, value in
+                let rgb = value.themeRGB
+                return (key, [
+                    Int(rgb.red.rounded()),
+                    Int(rgb.green.rounded()),
+                    Int(rgb.blue.rounded()),
+                ])
+            })
+        }
         let target = HousePartyFramePayload(
             sequence: housePartySequence,
             peakRgb: targetRgb,
             peakBrightnessPct: smoothedHousePartyLocalBrightness,
             cloudPeakBrightnessPct: smoothedHousePartyCloudBrightness,
             transitionSeconds: lightTransitionSeconds,
-            hueMode: group?.housePartyHueMode ?? "follow",
-            brightnessMode: group?.housePartyBrightnessMode ?? "follow",
+            hueMode: colorGroup?.housePartyHueMode ?? legacyGroup?.housePartyHueMode ?? "follow",
+            brightnessMode: colorGroup?.housePartyBrightnessMode ?? legacyGroup?.housePartyBrightnessMode ?? "follow",
             ambient: !signal.playing,
             themeId: currentThemeEntry?.themeId,
             themeVariant: currentThemeVariant,
             themeTransitionSeconds: currentThemeBroadcastTransitionSeconds,
+            colorThemeId: currentColorThemeID,
+            palette: palette,
             clock: track.map { currentTrack in
                 HousePartyMasterClockPayload(
                     trackKey: analysis?.trackKey ?? currentTrack.appleMusicId,
@@ -279,6 +309,8 @@ final class PhonoscopeStore: ObservableObject {
                 themeId: target.themeId,
                 themeVariant: target.themeVariant,
                 themeTransitionSeconds: target.themeTransitionSeconds,
+                colorThemeId: target.colorThemeId,
+                palette: target.palette,
                 clock: target.clock
             )
         } ?? target
@@ -293,6 +325,8 @@ final class PhonoscopeStore: ObservableObject {
                 || $0.themeId != frame.themeId
                 || $0.themeVariant != frame.themeVariant
                 || $0.themeTransitionSeconds != frame.themeTransitionSeconds
+                || $0.colorThemeId != frame.colorThemeId
+                || $0.palette != frame.palette
         } ?? true
         guard force || changed || Date().timeIntervalSince(lastHousePartyFrameDate) >= 2 else { return true }
         housePartySequence &+= 1
@@ -382,6 +416,8 @@ final class PhonoscopeStore: ObservableObject {
             guard 200..<300 ~= http.statusCode else { throw URLError(.badServerResponse) }
             let envelope = try decoder.decode(PhonoscopeConfigurationEnvelope.self, from: data)
             let previousGroup = activeThemeGroup
+            let previousColorGroup = activeColorGroup
+            let previousPreviewThemeID = configuration?.editorPreviewColorThemeId
             let changed = configuration?.activeModuleId != envelope.config.activeModuleId
                 || configuration?.activeModuleVersion != envelope.config.activeModuleVersion
             configuration = envelope.config
@@ -390,9 +426,13 @@ final class PhonoscopeStore: ObservableObject {
             if changed || module == nil {
                 await loadModule(id: envelope.config.activeModuleId, version: envelope.config.activeModuleVersion)
             }
-            if currentThemeEntry == nil || previousGroup != activeThemeGroup {
+            if (currentThemeEntry == nil && currentColorThemeID == nil)
+                || previousGroup != activeThemeGroup
+                || previousColorGroup != activeColorGroup
+                || previousPreviewThemeID != configuration?.editorPreviewColorThemeId {
                 selectNextTheme(force: true)
             }
+            refreshResolvedSettings()
             errorMessage = nil
         } catch {
             if configuration == nil { errorMessage = "PHONOSCOPE CONFIG OFFLINE" }
@@ -431,6 +471,7 @@ final class PhonoscopeStore: ObservableObject {
         var clockDiscontinuity = false
         guard MusicAuthorization.currentStatus == .authorized else {
             signal = makeSignal(position: signal.time + delta, playing: false, identity: nil, analysis: nil, delta: delta)
+            refreshResolvedSettings()
             return
         }
 
@@ -457,9 +498,7 @@ final class PhonoscopeStore: ObservableObject {
             lastLyricIndex = -1
             status = "RESOLVING \(nextIdentity.title.uppercased())"
             Task { [weak self] in await self?.resolveTrack(nextIdentity) }
-            selectNextTheme(force: configuration?.themeGroups.first(where: {
-                $0.id == configuration?.moduleThemeGroupIds[configuration?.activeModuleId ?? ""]
-            })?.changeMode == "song")
+            selectNextTheme(force: activeColorGroup?.changeMode == "song" || activeThemeGroup?.changeMode == "song")
         } else if nextIdentity == nil {
             clockDiscontinuity = lastTrackIdentity != nil
             lastTrackIdentity = nil
@@ -474,6 +513,7 @@ final class PhonoscopeStore: ObservableObject {
             clockDiscontinuity = true
         }
         signal = makeSignal(position: position, playing: playing, identity: track, analysis: analysis, delta: delta)
+        refreshResolvedSettings()
         if clockDiscontinuity {
             requestImmediateHousePartyFrame()
         }
@@ -486,15 +526,28 @@ final class PhonoscopeStore: ObservableObject {
         }
     }
 
+    private var activeColorGroup: PhonoscopeColorGroup? {
+        guard let configuration else { return nil }
+        let previewGroupID = configuration.editorPreviewColorGroupId.flatMap { $0.isEmpty ? nil : $0 }
+        guard let id = previewGroupID
+            ?? configuration.moduleColorGroupIds?[configuration.activeModuleId]
+            ?? configuration.colorGroups?.first(where: { $0.moduleId == configuration.activeModuleId })?.id
+        else { return nil }
+        return configuration.colorGroups?.first {
+            $0.id == id && $0.moduleId == configuration.activeModuleId
+        }
+    }
+
     private var activeThemeGroup: PhonoscopeThemeGroup? {
         guard let configuration,
-              let id = configuration.moduleThemeGroupIds[configuration.activeModuleId]
+              let id = configuration.moduleThemeGroupIds?[configuration.activeModuleId]
         else { return nil }
-        return configuration.themeGroups.first { $0.id == id }
+        return configuration.themeGroups?.first { $0.id == id }
     }
 
     var settingTransitionSeconds: Double {
-        activeThemeGroup?.transitionSeconds ?? Double(configuration?.transitionMs ?? 600) / 1_000
+        if activeColorGroup != nil { return 0.05 }
+        return activeThemeGroup?.transitionSeconds ?? Double(configuration?.transitionMs ?? 600) / 1_000
     }
 
     private func matchingEntries(_ group: PhonoscopeThemeGroup) -> [PhonoscopeThemeGroupEntry] {
@@ -515,6 +568,42 @@ final class PhonoscopeStore: ObservableObject {
     }
 
     private func selectNextTheme(force: Bool) {
+        if let group = activeColorGroup {
+            let candidates = group.themes
+            guard !candidates.isEmpty else {
+                activeColorTheme = nil
+                currentColorThemeID = nil
+                visualizerTheme = nil
+                return
+            }
+            let next: PhonoscopeColorTheme
+            if let previewID = configuration?.editorPreviewColorThemeId, !previewID.isEmpty,
+               let preview = candidates.first(where: { $0.id == previewID }) {
+                next = preview
+            } else if group.order == "shuffle", candidates.count > 1 {
+                next = candidates.filter { $0.id != currentColorThemeID }.randomElement() ?? candidates[0]
+            } else if let currentColorThemeID,
+                      let index = candidates.firstIndex(where: { $0.id == currentColorThemeID }) {
+                next = candidates[(index + 1) % candidates.count]
+            } else {
+                next = candidates[0]
+            }
+            if !force, next.id == currentColorThemeID { return }
+            currentThemeEntry = nil
+            currentThemeVariant = nil
+            currentColorThemeID = next.id
+            activeColorTheme = next
+            currentThemeBroadcastTransitionSeconds = group.transitionSeconds
+            let target = dashboardTheme(for: next)
+            themeFrom = visualizerTheme ?? target
+            themeTarget = target
+            themeTransitionStart = Date()
+            lastWholeThemeChange = Date()
+            lastWholeThemeBarIndex = signal.barIndex
+            parameterDriverStates = [:]
+            refreshResolvedSettings()
+            return
+        }
         guard let group = activeThemeGroup else {
             currentThemeEntry = nil
             currentThemeVariant = nil
@@ -556,6 +645,32 @@ final class PhonoscopeStore: ObservableObject {
     }
 
     private func advanceTheme() {
+        if let group = activeColorGroup {
+            if configuration?.editorPreviewColorThemeId?.isEmpty == false {
+                if let from = themeFrom, let target = themeTarget {
+                    let progress = min(1, Date().timeIntervalSince(themeTransitionStart) / 0.05)
+                    visualizerTheme = from.mixed(with: target, amount: progress)
+                }
+                refreshResolvedSettings()
+                return
+            }
+            if group.changeMode == "interval",
+               Date().timeIntervalSince(lastWholeThemeChange) >= group.waitSeconds + group.transitionSeconds {
+                selectNextTheme(force: true)
+            } else if group.changeMode == "downbeat",
+                      signal.playing,
+                      signal.barIndex != lastWholeThemeBarIndex {
+                selectNextTheme(force: true)
+            }
+            if let from = themeFrom, let target = themeTarget {
+                let duration = max(0, group.transitionSeconds)
+                let progress = duration == 0 ? 1 : min(1, Date().timeIntervalSince(themeTransitionStart) / duration)
+                let eased = progress * progress * (3 - 2 * progress)
+                visualizerTheme = from.mixed(with: target, amount: eased)
+            }
+            refreshResolvedSettings()
+            return
+        }
         guard let group = activeThemeGroup else { visualizerTheme = nil; return }
         if group.changeMode == "interval",
            Date().timeIntervalSince(lastWholeThemeChange) >= group.waitSeconds + group.transitionSeconds {
@@ -611,6 +726,141 @@ final class PhonoscopeStore: ObservableObject {
         let progress = duration == 0 ? 1 : min(1, Date().timeIntervalSince(themeTransitionStart) / duration)
         let eased = progress * progress * (3 - 2 * progress)
         visualizerTheme = from.mixed(with: target, amount: eased)
+    }
+
+    private func dashboardTheme(for theme: PhonoscopeColorTheme) -> DashboardTheme {
+        var target = housePartyFallbackTheme
+        if let color = theme.colors["backgroundPrimary"]?.themeRGB { target.background = color }
+        if let color = theme.colors["backgroundSecondary"]?.themeRGB {
+            // Particle Ripples renders its letterboxed background through
+            // FluidBackgroundView, whose blob channels are accent/highlight.
+            // Keep dot palette slots exclusive to the Metal particle renderer.
+            target.accent = color
+            target.highlight = color
+        }
+        if let color = theme.colors["primaryText"]?.themeRGB { target.clockColor = color }
+        if let color = theme.colors["secondaryText"]?.themeRGB {
+            target.titleDark = color
+            target.titleLight = color
+            target.titleTone = "light"
+        }
+        return target
+    }
+
+    private func refreshResolvedSettings() {
+        guard let module else {
+            resolvedModuleSettings = [:]
+            driverInterpolatedSettingIDs = []
+            return
+        }
+        var values = Dictionary(uniqueKeysWithValues: module.settings.map { ($0.id, $0.default) })
+        var drivenSettingIDs: Set<String> = []
+        if let configured = configuration?.moduleSettings[module.id] {
+            values.merge(configured) { _, configured in configured }
+        }
+        if let sources = configuration?.moduleParameterSources?[module.id] {
+            for setting in module.settings {
+                guard let source = sources[setting.id], setting.updateMode != "structural" else { continue }
+                let baseline = values[setting.id] ?? setting.default
+                values[setting.id] = resolvedValue(
+                    source: source,
+                    setting: setting,
+                    baseline: baseline,
+                    key: "baseline:\(module.id):\(setting.id)"
+                )
+                if source.type != "manual" {
+                    drivenSettingIDs.insert(setting.id)
+                }
+            }
+        }
+        guard let theme = activeColorTheme,
+              let overrides = theme.parameterOverrides[module.id]
+        else {
+            resolvedModuleSettings = values
+            driverInterpolatedSettingIDs = drivenSettingIDs
+            return
+        }
+        for setting in module.settings {
+            guard let source = overrides[setting.id], setting.updateMode != "structural" else { continue }
+            let baseline = values[setting.id] ?? setting.default
+            values[setting.id] = resolvedValue(
+                source: source,
+                setting: setting,
+                baseline: baseline,
+                key: "\(theme.id):\(module.id):\(setting.id)"
+            )
+            if source.type == "manual" {
+                drivenSettingIDs.remove(setting.id)
+            } else {
+                drivenSettingIDs.insert(setting.id)
+            }
+        }
+        resolvedModuleSettings = values
+        driverInterpolatedSettingIDs = drivenSettingIDs
+    }
+
+    private func resolvedValue(
+        source: PhonoscopeParameterSource,
+        setting: PhonoscopeModuleSetting,
+        baseline: Double,
+        key: String
+    ) -> Double {
+        func clamped(_ value: Double) -> Double {
+            let bounded = max(setting.min, min(setting.max, value))
+            guard setting.step > 0 else { return bounded }
+            return max(setting.min, min(setting.max, setting.min + ((bounded - setting.min) / setting.step).rounded() * setting.step))
+        }
+        if source.type == "manual" { return clamped(source.value ?? baseline) }
+        let lower = clamped(source.min ?? baseline)
+        let upper = max(lower, clamped(source.max ?? baseline))
+        let now = Date()
+        var state = parameterDriverStates[key] ?? ParameterDriverState(
+            current: lower,
+            target: lower,
+            eventKey: "",
+            lastUpdated: now
+        )
+        let delta = max(1.0 / 120.0, min(0.25, signal.delta))
+        if source.type == "random" {
+            let eventKey: String
+            switch source.cadence ?? "beat" {
+            case "downbeat", "bar": eventKey = "bar:\(signal.barIndex)"
+            case "song": eventKey = "song:\(track?.appleMusicId ?? track?.title ?? "ambient")"
+            case "interval":
+                let interval = max(0.25, source.intervalSeconds ?? 4)
+                eventKey = "interval:\(Int(floor(signal.time / interval)))"
+            default: eventKey = "beat:\(signal.beatIndex)"
+            }
+            if eventKey != state.eventKey {
+                state.eventKey = eventKey
+                let seed = stableSeed("\(key):\(eventKey)")
+                let fraction = Double(seed % 1_000_003) / 1_000_002
+                state.target = lower + (upper - lower) * fraction
+            }
+            let duration = max(0, source.transitionSeconds ?? 0.5)
+            let amount = duration == 0 ? 1 : min(1, delta / duration)
+            state.current += (state.target - state.current) * amount
+        } else {
+            let driver: Double
+            switch source.type {
+            case "beat": driver = signal.beatPulse
+            case "downbeat": driver = signal.downbeatPulse
+            case "energy": driver = signal.energy
+            case "bass": driver = Double(signal.spectrum.prefix(8).max() ?? 0)
+            case "mid": driver = Double(signal.spectrum.dropFirst(8).prefix(12).max() ?? 0)
+            case "treble": driver = Double(signal.spectrum.dropFirst(20).max() ?? 0)
+            default: driver = 0
+            }
+            state.target = lower + (upper - lower) * max(0, min(1, driver))
+            let seconds = state.target >= state.current
+                ? max(0, source.attackSeconds ?? 0.05)
+                : max(0.05, source.releaseSeconds ?? 0.6)
+            let amount = seconds == 0 ? 1 : min(1, delta / seconds)
+            state.current += (state.target - state.current) * amount
+        }
+        state.lastUpdated = now
+        parameterDriverStates[key] = state
+        return clamped(state.current)
     }
 
     private func resolveTrack(_ identity: PhonoscopeTrackIdentity) async {

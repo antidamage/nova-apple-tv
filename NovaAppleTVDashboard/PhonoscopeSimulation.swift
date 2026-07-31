@@ -2,15 +2,39 @@ import Foundation
 import QuartzCore
 import simd
 
+private func phonoscopePaletteSlots(in expression: String) -> [String] {
+    let parts = expression.components(
+        separatedBy: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_")).inverted
+    )
+    return parts.enumerated().compactMap { index, component in
+        guard component == "palette", index + 1 < parts.count, !parts[index + 1].isEmpty else { return nil }
+        return parts[index + 1]
+    }
+}
+
 struct PhonoscopePalette: Equatable {
-    let accent: SIMD4<Float>
-    let highlight: SIMD4<Float>
-    let background: SIMD4<Float>
+    let colors: [String: SIMD4<Float>]
+
+    var accent: SIMD4<Float> { color("primary", fallback: SIMD4(0.45, 0.45, 0.45, 1)) }
+    var highlight: SIMD4<Float> { color("secondary", fallback: SIMD4(0.85, 0.85, 0.85, 1)) }
+    var background: SIMD4<Float> { color("backgroundPrimary", fallback: color("background", fallback: SIMD4(0, 0, 0, 1))) }
+
+    func color(_ id: String, fallback: SIMD4<Float>? = nil) -> SIMD4<Float> {
+        if let value = colors[id] { return value }
+        if id == "accent", let value = colors["primary"] { return value }
+        if id == "highlight", let value = colors["secondary"] { return value }
+        return fallback ?? accent
+    }
 
     static let `default` = PhonoscopePalette(
-        accent: SIMD4(0.45, 0.45, 0.45, 1),
-        highlight: SIMD4(0.85, 0.85, 0.85, 1),
-        background: SIMD4(0, 0, 0, 1)
+        colors: [
+            "primary": SIMD4(0.45, 0.45, 0.45, 1),
+            "secondary": SIMD4(0.85, 0.85, 0.85, 1),
+            "tertiary": SIMD4(0.65, 0.65, 0.65, 1),
+            "background": SIMD4(0, 0, 0, 1),
+            "backgroundPrimary": SIMD4(0, 0, 0, 1),
+            "backgroundSecondary": SIMD4(0.05, 0.07, 0.11, 1),
+        ]
     )
 }
 
@@ -34,6 +58,12 @@ private struct PhonoscopeSimEntity {
     var material: Float = 0
     var color = SIMD4<Float>(0.22, 0.72, 1, 0.8)
     var usesThemePalette = false
+    var paletteStartSlot = "primary"
+    var paletteEndSlot = "primary"
+    var paletteGlowStartSlot = "primary"
+    var paletteGlowEndSlot = "primary"
+    var paletteTrailStartSlot = "primary"
+    var paletteTrailEndSlot = "primary"
     var usesAnalyticWave = false
     var waveOffset = SIMD3<Float>.zero
     var waveTarget: Float = 0
@@ -53,6 +83,8 @@ private struct PhonoscopeFieldRange {
     let topology: String
     let spacing: Float
     let wireframe: PhonoscopeJSONValue?
+    let lineStartSlot: String
+    let lineEndSlot: String
     let radialBeatWave: PhonoscopeFieldWaveSource?
 }
 
@@ -100,6 +132,39 @@ private struct PhonoscopeEmitter {
     var emitted: Int
 }
 
+struct PhonoscopeSettingTransition: Equatable {
+    let start: Double
+    let target: Double
+    let startedAt: CFTimeInterval
+    let duration: Double
+
+    func value(at time: CFTimeInterval) -> Double {
+        let amount = duration == 0 ? 1 : min(1, max(0, (time - startedAt) / duration))
+        let eased = amount * amount * (3 - 2 * amount)
+        return start + (target - start) * eased
+    }
+
+    func isComplete(at time: CFTimeInterval) -> Bool {
+        duration == 0 || time - startedAt >= duration
+    }
+}
+
+enum PhonoscopeSettingInterpolationAction: Equatable {
+    case hold
+    case applyImmediately
+    case transition
+}
+
+func phonoscopeSettingInterpolationAction(
+    targetChanged: Bool,
+    wasDriverInterpolated: Bool,
+    isDriverInterpolated: Bool
+) -> PhonoscopeSettingInterpolationAction {
+    if isDriverInterpolated { return .applyImmediately }
+    if targetChanged || wasDriverInterpolated { return .transition }
+    return .hold
+}
+
 /// Fixed-rate, deliberately approximate scene simulation. It owns a dedicated
 /// serial queue, ingests immutable signal/module snapshots, and publishes the
 /// latest complete render snapshot without ever blocking Metal's draw callback.
@@ -112,6 +177,7 @@ final class PhonoscopeSimulation {
     private var pendingModule: PhonoscopeModule?
     private var pendingSignal = PhonoscopeSignalFrame.idle
     private var pendingSettings: [String: Double] = [:]
+    private var pendingDriverInterpolatedSettings: Set<String> = []
     private var pendingPalette = PhonoscopePalette.default
     private var pendingTransitionDuration: Double = 0.6
     private var pendingReloadGeneration = 0
@@ -121,10 +187,9 @@ final class PhonoscopeSimulation {
     private var signal = PhonoscopeSignalFrame.idle
     private var settings: [String: Double] = [:]
     private var palette = PhonoscopePalette.default
-    private var settingStarts: [String: Double] = [:]
     private var targetSettings: [String: Double] = [:]
-    private var transitionStarted = CACurrentMediaTime()
-    private var transitionDuration: Double = 0.6
+    private var driverInterpolatedSettings: Set<String> = []
+    private var settingTransitions: [String: PhonoscopeSettingTransition] = [:]
     private var reloadGeneration = 0
     private var moduleKey = ""
     private var entities: [PhonoscopeSimEntity] = []
@@ -159,6 +224,7 @@ final class PhonoscopeSimulation {
         module: PhonoscopeModule?,
         signal: PhonoscopeSignalFrame,
         settings: [String: Double],
+        driverInterpolatedSettings: Set<String>,
         palette: PhonoscopePalette,
         transitionDuration: Double,
         reloadGeneration: Int
@@ -167,6 +233,7 @@ final class PhonoscopeSimulation {
         pendingModule = module
         pendingSignal = signal
         pendingSettings = settings
+        pendingDriverInterpolatedSettings = driverInterpolatedSettings
         pendingPalette = palette
         pendingTransitionDuration = max(0, min(600, transitionDuration))
         pendingReloadGeneration = reloadGeneration
@@ -185,18 +252,42 @@ final class PhonoscopeSimulation {
         let nextModule = pendingModule
         let nextSignal = pendingSignal
         let nextSettings = pendingSettings
+        let nextDriverInterpolatedSettings = pendingDriverInterpolatedSettings
         let nextPalette = pendingPalette
         let nextTransitionDuration = pendingTransitionDuration
         let nextReloadGeneration = pendingReloadGeneration
         let nextKey = pendingModuleKey
         inputLock.unlock()
         let requiresRebuild = nextKey != moduleKey || nextReloadGeneration != reloadGeneration
-        if nextSettings != targetSettings {
-            settingStarts = settings
-            targetSettings = nextSettings
-            transitionStarted = CACurrentMediaTime()
-            transitionDuration = nextTransitionDuration
+        let now = CACurrentMediaTime()
+        if !requiresRebuild {
+            for (key, target) in nextSettings {
+                let action = phonoscopeSettingInterpolationAction(
+                    targetChanged: targetSettings[key] != target,
+                    wasDriverInterpolated: driverInterpolatedSettings.contains(key),
+                    isDriverInterpolated: nextDriverInterpolatedSettings.contains(key)
+                )
+                if action == .applyImmediately {
+                    settings[key] = target
+                    settingTransitions.removeValue(forKey: key)
+                    continue
+                }
+                if action == .transition {
+                    settingTransitions[key] = PhonoscopeSettingTransition(
+                        start: settings[key] ?? targetSettings[key] ?? target,
+                        target: target,
+                        startedAt: now,
+                        duration: nextTransitionDuration
+                    )
+                }
+            }
+            for key in Array(settings.keys) where nextSettings[key] == nil {
+                settings.removeValue(forKey: key)
+                settingTransitions.removeValue(forKey: key)
+            }
         }
+        targetSettings = nextSettings
+        driverInterpolatedSettings = nextDriverInterpolatedSettings
         palette = nextPalette
         moduleKey = nextKey
         module = nextModule
@@ -204,6 +295,8 @@ final class PhonoscopeSimulation {
         if requiresRebuild {
             settings = nextSettings
             targetSettings = nextSettings
+            driverInterpolatedSettings = nextDriverInterpolatedSettings
+            settingTransitions.removeAll(keepingCapacity: true)
             palette = nextPalette
             rebuild()
         }
@@ -240,11 +333,16 @@ final class PhonoscopeSimulation {
     }
 
     private func advanceConfiguration(now: CFTimeInterval) {
-        let amount = transitionDuration == 0 ? 1 : min(1, max(0, (now - transitionStarted) / transitionDuration))
-        let eased = amount * amount * (3 - 2 * amount)
-        for (key, target) in targetSettings {
-            let start = settingStarts[key] ?? settings[key] ?? target
-            settings[key] = start + (target - start) * eased
+        var completed: [String] = []
+        for (key, transition) in settingTransitions {
+            settings[key] = transition.value(at: now)
+            if transition.isComplete(at: now) {
+                settings[key] = transition.target
+                completed.append(key)
+            }
+        }
+        for key in completed {
+            settingTransitions.removeValue(forKey: key)
         }
         if module?.id == "particle-ripples" {
             let threshold = Float(settings["peak_threshold"] ?? 0.28)
@@ -383,6 +481,21 @@ final class PhonoscopeSimulation {
             }
             let fallbackSpacingX = columns > 1 ? (module.maximum.x - module.minimum.x) / Float(columns - 1) : 1
             let fallbackSpacingY = rows > 1 ? (module.maximum.y - module.minimum.y) / Float(rows - 1) : fallbackSpacingX
+            let legacyLineSlots = phonoscopePaletteSlots(
+                in: field["wireframeColor"]?["$expr"]?.stringValue ?? ""
+            )
+            let lineStartSlots = phonoscopePaletteSlots(
+                in: field["wireframeColorStart"]?["$expr"]?.stringValue ?? ""
+            )
+            let lineEndSlots = phonoscopePaletteSlots(
+                in: field["wireframeColorEnd"]?["$expr"]?.stringValue ?? ""
+            )
+            let lineStartSlot = lineStartSlots.first
+                ?? legacyLineSlots.first
+                ?? "linePrimary"
+            let lineEndSlot = lineEndSlots.first
+                ?? legacyLineSlots.dropFirst().first
+                ?? lineStartSlot
             fields.append(PhonoscopeFieldRange(
                 range: start..<entities.count,
                 columns: columns,
@@ -391,6 +504,8 @@ final class PhonoscopeSimulation {
                 topology: field["topology"]?.stringValue ?? "grid",
                 spacing: max(0.0001, min(spacingX ?? fallbackSpacingX, spacingY ?? fallbackSpacingY)),
                 wireframe: field["wireframe"],
+                lineStartSlot: lineStartSlot,
+                lineEndSlot: lineEndSlot,
                 radialBeatWave: radialBeatWave(in: resolvedScene)
             ))
             if fields.last?.radialBeatWave != nil {
@@ -417,6 +532,8 @@ final class PhonoscopeSimulation {
                 topology: "nearest",
                 spacing: 1,
                 wireframe: nil,
+                lineStartSlot: "primary",
+                lineEndSlot: "primary",
                 radialBeatWave: nil
             ))
         }
@@ -492,7 +609,50 @@ final class PhonoscopeSimulation {
         let phase = random()
         let palette = SIMD4<Float>(0.12 + phase * 0.32, 0.54 + phase * 0.34, 0.92, 0.78)
         let paletteExpression = render["color"]?["$expr"]?.stringValue ?? ""
-        let usesThemePalette = paletteExpression.contains("palette.")
+        let colorStartExpression = render["colorStart"]?["$expr"]?.stringValue ?? ""
+        let colorEndExpression = render["colorEnd"]?["$expr"]?.stringValue ?? ""
+        let glowExpression = render["glowColor"]?["$expr"]?.stringValue ?? ""
+        let glowStartExpression = render["glowColorStart"]?["$expr"]?.stringValue ?? ""
+        let glowEndExpression = render["glowColorEnd"]?["$expr"]?.stringValue ?? ""
+        let trailExpression = render["trailColor"]?["$expr"]?.stringValue ?? ""
+        let trailStartExpression = render["trailColorStart"]?["$expr"]?.stringValue ?? ""
+        let trailEndExpression = render["trailColorEnd"]?["$expr"]?.stringValue ?? ""
+        let usesThemePalette = [
+            paletteExpression,
+            colorStartExpression,
+            colorEndExpression,
+            glowExpression,
+            glowStartExpression,
+            glowEndExpression,
+            trailExpression,
+            trailStartExpression,
+            trailEndExpression,
+        ].contains { $0.contains("palette.") }
+        let legacyColorSlots = phonoscopePaletteSlots(in: paletteExpression)
+        let colorStartSlots = phonoscopePaletteSlots(in: colorStartExpression)
+        let colorEndSlots = phonoscopePaletteSlots(in: colorEndExpression)
+        let legacyGlowSlots = phonoscopePaletteSlots(in: glowExpression)
+        let glowStartSlots = phonoscopePaletteSlots(in: glowStartExpression)
+        let glowEndSlots = phonoscopePaletteSlots(in: glowEndExpression)
+        let legacyTrailSlots = phonoscopePaletteSlots(in: trailExpression)
+        let trailStartSlots = phonoscopePaletteSlots(in: trailStartExpression)
+        let trailEndSlots = phonoscopePaletteSlots(in: trailEndExpression)
+        let colorStartSlot = colorStartSlots.first ?? legacyColorSlots.first ?? "primary"
+        let colorEndSlot = colorEndSlots.first
+            ?? legacyColorSlots.dropFirst().first
+            ?? colorStartSlot
+        let glowStartSlot = glowStartSlots.first
+            ?? legacyGlowSlots.first
+            ?? colorStartSlot
+        let glowEndSlot = glowEndSlots.first
+            ?? legacyGlowSlots.dropFirst().first
+            ?? glowStartSlot
+        let trailStartSlot = trailStartSlots.first
+            ?? legacyTrailSlots.first
+            ?? colorStartSlot
+        let trailEndSlot = trailEndSlots.first
+            ?? legacyTrailSlots.dropFirst().first
+            ?? trailStartSlot
         let color: SIMD4<Float>
         if let components = render["color"]?.arrayValue?.compactMap(\.numberValue), components.count >= 3 {
             color = SIMD4(
@@ -525,6 +685,12 @@ final class PhonoscopeSimulation {
             material: materialCode(materialName),
             color: color,
             usesThemePalette: usesThemePalette,
+            paletteStartSlot: colorStartSlot,
+            paletteEndSlot: colorEndSlot,
+            paletteGlowStartSlot: glowStartSlot,
+            paletteGlowEndSlot: glowEndSlot,
+            paletteTrailStartSlot: trailStartSlot,
+            paletteTrailEndSlot: trailEndSlot,
             inverseMass: 1 / max(0.001, mass),
             inertia: max(0, min(1, inertia)),
             drag: max(0, drag)
@@ -887,12 +1053,25 @@ final class PhonoscopeSimulation {
         diagnostics.simulationMilliseconds = (CACurrentMediaTime() - started) * 1_000
         var particles: [PhonoscopeRenderParticle] = []
         particles.reserveCapacity(entities.count * 3)
-        func renderedColor(for entity: PhonoscopeSimEntity) -> SIMD4<Float> {
-            let energy = min(1, max(0, entity.energy))
+        func renderedColors(for entity: PhonoscopeSimEntity) -> (SIMD4<Float>, SIMD4<Float>) {
             let usesThemePalette = entity.usesThemePalette || module?.id == "particle-ripples"
-            let baseColor = usesThemePalette ? palette.accent : entity.color
-            let peakColor = usesThemePalette ? palette.highlight : entity.color
-            return simd_mix(baseColor, peakColor, SIMD4<Float>(repeating: energy))
+            guard usesThemePalette else { return (entity.color, entity.color) }
+            return (
+                palette.color(entity.paletteStartSlot),
+                palette.color(entity.paletteEndSlot)
+            )
+        }
+        func renderedGlowColors(for entity: PhonoscopeSimEntity) -> (SIMD4<Float>, SIMD4<Float>) {
+            (
+                palette.color(entity.paletteGlowStartSlot),
+                palette.color(entity.paletteGlowEndSlot)
+            )
+        }
+        func renderedTrailColors(for entity: PhonoscopeSimEntity) -> (SIMD4<Float>, SIMD4<Float>) {
+            (
+                palette.color(entity.paletteTrailStartSlot),
+                palette.color(entity.paletteTrailEndSlot)
+            )
         }
         for entity in entities {
             let energy = min(1, max(0, entity.energy))
@@ -900,7 +1079,8 @@ final class PhonoscopeSimulation {
                 ? max(0, min(1, (energy - entity.flareThreshold) / (1 - entity.flareThreshold)))
                 : 0
             let flare = linearFlare * linearFlare * (3 - 2 * linearFlare)
-            let color = renderedColor(for: entity)
+            let colors = renderedColors(for: entity)
+            let glowColors = renderedGlowColors(for: entity)
             let size = entity.size
                 + energy * entity.energySize
                 + Float(signal.beatPulse) * entity.beatSize
@@ -908,7 +1088,10 @@ final class PhonoscopeSimulation {
             let glow = entity.glow + energy + flare * entity.flareGlow
             particles.append(PhonoscopeRenderParticle(
                 position: entity.position,
-                color: color,
+                color: colors.0,
+                colorEnd: colors.1,
+                glowColor: glowColors.0,
+                glowColorEnd: glowColors.1,
                 size: size,
                 glow: glow,
                 primitive: entity.primitive,
@@ -921,9 +1104,13 @@ final class PhonoscopeSimulation {
             if entity.trailLength > 0,
                linearFlare > 0,
                simd_length_squared(trailDirection) > 0.000_000_01 {
+                let trailColors = renderedTrailColors(for: entity)
                 particles.append(PhonoscopeRenderParticle(
                     position: entity.position,
-                    color: color,
+                    color: trailColors.0,
+                    colorEnd: trailColors.1,
+                    glowColor: trailColors.0,
+                    glowColorEnd: trailColors.1,
                     size: size,
                     glow: glow,
                     primitive: 5,
@@ -942,15 +1129,12 @@ final class PhonoscopeSimulation {
                 guard field.range.contains(start), field.range.contains(end) else { return }
                 let source = entities[start]
                 let destination = entities[end]
-                var lineColor = simd_mix(
-                    renderedColor(for: source),
-                    renderedColor(for: destination),
-                    SIMD4<Float>(repeating: 0.5)
-                )
-                lineColor.w = 0.5
                 particles.append(PhonoscopeRenderParticle(
                     position: destination.position,
-                    color: lineColor,
+                    color: palette.color(field.lineStartSlot),
+                    colorEnd: palette.color(field.lineEndSlot),
+                    glowColor: palette.color(field.lineStartSlot),
+                    glowColorEnd: palette.color(field.lineEndSlot),
                     size: max(0.0006, min(source.size, destination.size) * 0.18),
                     glow: 0,
                     primitive: 6,
@@ -974,7 +1158,11 @@ final class PhonoscopeSimulation {
             serial: serial,
             timestamp: CACurrentMediaTime(),
             particles: particles,
-            background: palette.background,
+            background: simd_mix(
+                palette.background,
+                palette.color("backgroundSecondary", fallback: palette.background),
+                SIMD4<Float>(repeating: Float(min(0.35, max(0, signal.energy * 0.35))))
+            ),
             boundsMinimum: module?.minimum ?? SIMD3(-1.7778, -1, 0),
             boundsMaximum: module?.maximum ?? SIMD3(1.7778, 1, 0),
             is3D: module?.is3D ?? false,

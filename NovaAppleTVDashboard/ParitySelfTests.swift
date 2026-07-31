@@ -11,6 +11,8 @@ enum ParitySelfTests {
         testThemeDecoding()
         testOrbContract()
         testSpeechEnvelope()
+        testPhonoscopeQualityPolicy()
+        testPhonoscopeSettingInterpolation()
         testRootBackExitGate()
         testExitCommandShield()
     }
@@ -127,6 +129,77 @@ enum ParitySelfTests {
             safetyDeadline: 10
         )
         assert(fallback.envelope(at: 0.3, alertPulsePeriod: 1.2) > 0)
+    }
+
+    private static func testPhonoscopeQualityPolicy() {
+        assert(phonoscopeAASampleCount(
+            quality: "high",
+            renderScale: 0.65,
+            supportsFourSamples: true
+        ) == 4)
+        assert(phonoscopeAASampleCount(
+            quality: "auto",
+            renderScale: 1,
+            supportsFourSamples: true
+        ) == 4)
+        assert(phonoscopeAASampleCount(
+            quality: "auto",
+            renderScale: 0.9,
+            supportsFourSamples: true
+        ) == 1)
+        assert(phonoscopeAASampleCount(
+            quality: "balanced",
+            renderScale: 1,
+            supportsFourSamples: true
+        ) == 1)
+        assert(phonoscopeAASampleCount(
+            quality: "performance",
+            renderScale: 1,
+            supportsFourSamples: true
+        ) == 1)
+        assert(phonoscopeAASampleCount(
+            quality: "high",
+            renderScale: 1,
+            supportsFourSamples: false
+        ) == 1)
+    }
+
+    private static func testPhonoscopeSettingInterpolation() {
+        assert(phonoscopeSettingInterpolationAction(
+            targetChanged: true,
+            wasDriverInterpolated: false,
+            isDriverInterpolated: true
+        ) == .applyImmediately)
+        assert(phonoscopeSettingInterpolationAction(
+            targetChanged: true,
+            wasDriverInterpolated: true,
+            isDriverInterpolated: true
+        ) == .applyImmediately)
+        assert(phonoscopeSettingInterpolationAction(
+            targetChanged: true,
+            wasDriverInterpolated: false,
+            isDriverInterpolated: false
+        ) == .transition)
+        assert(phonoscopeSettingInterpolationAction(
+            targetChanged: false,
+            wasDriverInterpolated: true,
+            isDriverInterpolated: false
+        ) == .transition)
+        assert(phonoscopeSettingInterpolationAction(
+            targetChanged: false,
+            wasDriverInterpolated: false,
+            isDriverInterpolated: false
+        ) == .hold)
+
+        let transition = PhonoscopeSettingTransition(
+            start: 0,
+            target: 10,
+            startedAt: 20,
+            duration: 2
+        )
+        assert(transition.value(at: 20) == 0)
+        assert(transition.value(at: 21) == 5)
+        assert(transition.value(at: 22) == 10)
     }
 
     private static func testRootBackExitGate() {
