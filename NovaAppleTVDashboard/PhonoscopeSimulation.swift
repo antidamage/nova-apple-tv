@@ -183,6 +183,7 @@ final class PhonoscopeSimulation {
     private var pendingDriverInterpolatedSettings: Set<String> = []
     private var pendingPalette = PhonoscopePalette.default
     private var pendingTransitionDuration: Double = 0.6
+    private var pendingTransitionPaused = false
     private var pendingReloadGeneration = 0
     private var pendingModuleKey = ""
 
@@ -194,6 +195,7 @@ final class PhonoscopeSimulation {
     private var targetSettings: [String: Double] = [:]
     private var driverInterpolatedSettings: Set<String> = []
     private var transitionDuration: Double = 0.6
+    private var transitionPaused = false
     private var reloadGeneration = 0
     private var moduleKey = ""
     private var entities: [PhonoscopeSimEntity] = []
@@ -231,6 +233,7 @@ final class PhonoscopeSimulation {
         driverInterpolatedSettings: Set<String>,
         palette: PhonoscopePalette,
         transitionDuration: Double,
+        transitionPaused: Bool,
         reloadGeneration: Int
     ) {
         inputLock.lock()
@@ -240,6 +243,7 @@ final class PhonoscopeSimulation {
         pendingDriverInterpolatedSettings = driverInterpolatedSettings
         pendingPalette = palette
         pendingTransitionDuration = max(0, min(600, transitionDuration))
+        pendingTransitionPaused = transitionPaused
         pendingReloadGeneration = reloadGeneration
         pendingModuleKey = module.map { "\($0.id)@\($0.version)" } ?? ""
         inputLock.unlock()
@@ -259,6 +263,7 @@ final class PhonoscopeSimulation {
         let nextDriverInterpolatedSettings = pendingDriverInterpolatedSettings
         let nextPalette = pendingPalette
         let nextTransitionDuration = pendingTransitionDuration
+        let nextTransitionPaused = pendingTransitionPaused
         let nextReloadGeneration = pendingReloadGeneration
         let nextKey = pendingModuleKey
         inputLock.unlock()
@@ -284,6 +289,7 @@ final class PhonoscopeSimulation {
         driverInterpolatedSettings = nextDriverInterpolatedSettings
         targetPalette = nextPalette
         transitionDuration = nextTransitionDuration
+        transitionPaused = nextTransitionPaused
         moduleKey = nextKey
         module = nextModule
         reloadGeneration = nextReloadGeneration
@@ -327,6 +333,7 @@ final class PhonoscopeSimulation {
     }
 
     private func advanceConfiguration(delta: Double) {
+        guard !transitionPaused else { return }
         let amount = phonoscopeChaseAmount(delta: delta, settlingDuration: transitionDuration)
         palette = palette.approached(toward: targetPalette, amount: amount)
         for (key, target) in targetSettings where !driverInterpolatedSettings.contains(key) {
