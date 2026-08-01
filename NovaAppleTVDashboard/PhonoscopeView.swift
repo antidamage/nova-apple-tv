@@ -5,7 +5,9 @@ struct PhonoscopeView: View {
     @EnvironmentObject private var dashboard: DashboardStore
     @FocusState private var capturesRemote: Bool
     @FocusState private var housePartyButtonFocused: Bool
+    @FocusState private var themeControlFocus: ThemeControl?
     @State private var showsHousePartyBar = false
+    @State private var showsThemeBar = false
     let onBack: () -> Void
 
     var body: some View {
@@ -37,6 +39,7 @@ struct PhonoscopeView: View {
                 paletteColors: phonoscope.activeColorTheme?.colors.mapValues(\.vector) ?? [:],
                 quality: phonoscope.configuration?.quality ?? "auto",
                 transitionDuration: phonoscope.settingTransitionSeconds,
+                transitionPaused: phonoscope.themeInterpolationPaused,
                 reloadGeneration: phonoscope.configuration?.moduleReloadGenerations[phonoscope.module?.id ?? ""] ?? 0,
                 letterboxedBackground: usesLetterboxedBackground
             )
@@ -53,6 +56,7 @@ struct PhonoscopeView: View {
                     .multilineTextAlignment(.center)
                     .foregroundStyle(effectiveTheme.clockText)
                     .opacity(visualiserOpacity("primaryText"))
+                    .scaleEffect(phonoscope.messageScale, anchor: .center)
                     .lineLimit(3)
                     .frame(maxWidth: 1_280)
                     .padding(.horizontal, 80)
@@ -61,6 +65,10 @@ struct PhonoscopeView: View {
 
             if showsHousePartyBar {
                 housePartyBar
+            }
+
+            if showsThemeBar {
+                themeBar
             }
 
             // Keep a real focus target inside the full-screen surface. Without
@@ -83,6 +91,12 @@ struct PhonoscopeView: View {
                 }
                 return
             }
+            if showsThemeBar {
+                if direction == .up {
+                    hideThemeBar()
+                }
+                return
+            }
             switch direction {
             case .left:
                 phonoscope.skipSong(forward: false)
@@ -94,15 +108,32 @@ struct PhonoscopeView: View {
                 DispatchQueue.main.async {
                     housePartyButtonFocused = true
                 }
+            case .down:
+                showsThemeBar = true
+                capturesRemote = false
+                DispatchQueue.main.async {
+                    themeControlFocus = .pause
+                }
             default:
                 break
             }
         }
         .onAppear {
             showsHousePartyBar = false
+            showsThemeBar = false
             phonoscope.setHousePartyEnabled(false, fallbackTheme: effectiveTheme)
             DispatchQueue.main.async {
                 capturesRemote = true
+            }
+        }
+        .onChange(of: housePartyButtonFocused) { wasFocused, isFocused in
+            if showsHousePartyBar, wasFocused, !isFocused {
+                hideHousePartyBar()
+            }
+        }
+        .onChange(of: themeControlFocus) { previousFocus, nextFocus in
+            if showsThemeBar, previousFocus != nil, nextFocus == nil {
+                hideThemeBar()
             }
         }
         .task {
@@ -137,27 +168,80 @@ struct PhonoscopeView: View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
-                Button {
+                Text("HOUSE PARTY")
+                    .font(.novaDisplay(32))
+                    .foregroundStyle(Color(white: 0.75))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .background(housePartyBarColor)
+                    .focusable(true)
+                    .focusEffectDisabled()
+                    .focused($housePartyButtonFocused)
+                    .onTapGesture {
                     phonoscope.setHousePartyEnabled(!phonoscope.housePartyEnabled, fallbackTheme: effectiveTheme)
                     hideHousePartyBar()
-                } label: {
-                    Text("HOUSE PARTY")
-                        .font(.novaDisplay(32))
-                        .foregroundStyle(Color(white: 0.75))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .tint(housePartyBarColor)
-                .focusEffectDisabled()
-                .focused($housePartyButtonFocused)
+                    }
+                .accessibilityAddTraits(.isButton)
                 .accessibilityValue(phonoscope.housePartyEnabled ? "On" : "Off")
                 .frame(height: geometry.size.height * 0.1)
-                .background(housePartyBarColor)
             }
         }
         .ignoresSafeArea()
         .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    private var themeBar: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 16) {
+                themeControl(title: "PREVIOUS", symbol: "backward.fill", control: .previous) {
+                    phonoscope.stepTheme(forward: false)
+                }
+                themeControl(
+                    title: phonoscope.themeSwitchingPaused ? "RESUME" : "PAUSE",
+                    symbol: phonoscope.themeSwitchingPaused ? "play.fill" : "pause.fill",
+                    control: .pause
+                ) {
+                    phonoscope.toggleThemeSwitching()
+                }
+                themeControl(title: "NEXT", symbol: "forward.fill", control: .next) {
+                    phonoscope.stepTheme(forward: true)
+                }
+            }
+            .frame(width: 560, height: 92)
+            .padding(.top, 34)
+            .padding(.bottom, 18)
+            .padding(.horizontal, 28)
+            .background(themeBarCharcoal, in: CutCornerShape(cut: 18))
+            .overlay {
+                CutCornerShape(cut: 18).stroke(effectiveTheme.borderColor, lineWidth: 1)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity)
+        .ignoresSafeArea(edges: .top)
+        .transition(.move(edge: .top).combined(with: .opacity))
+    }
+
+    private func themeControl(
+        title: String,
+        symbol: String,
+        control: ThemeControl,
+        action: @escaping () -> Void
+    ) -> some View {
+        ControlButton(
+            title: title,
+            symbol: symbol,
+            isFocused: themeControlFocus == control,
+            isActive: control == .pause && phonoscope.themeSwitchingPaused,
+            focusedBackground: themeBarCharcoal,
+            focusedBorder: dashboard.theme.highlight.color,
+            action: action
+        )
+        .focused($themeControlFocus, equals: control)
+    }
+
+    private var themeBarCharcoal: Color {
+        Color(red: 0.105, green: 0.11, blue: 0.12)
     }
 
     private var housePartyBarColor: Color {
@@ -167,6 +251,14 @@ struct PhonoscopeView: View {
     private func hideHousePartyBar() {
         showsHousePartyBar = false
         housePartyButtonFocused = false
+        DispatchQueue.main.async {
+            capturesRemote = true
+        }
+    }
+
+    private func hideThemeBar() {
+        showsThemeBar = false
+        themeControlFocus = nil
         DispatchQueue.main.async {
             capturesRemote = true
         }
@@ -225,6 +317,12 @@ struct PhonoscopeView: View {
         let album = track.album.map { " • \($0)" } ?? ""
         return "\(track.artist)\(album) • \(bpm) BPM"
     }
+}
+
+private enum ThemeControl: Hashable {
+    case previous
+    case pause
+    case next
 }
 
 private struct PhonoscopeEdgeVignette: View {

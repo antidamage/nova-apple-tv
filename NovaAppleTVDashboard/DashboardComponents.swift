@@ -50,8 +50,18 @@ struct CutCornerShape: Shape {
 extension View {
     /// Applies the three-state (idle / active / focused) chrome shared by every
     /// rectangular control surface.
-    func controlChrome(isFocused: Bool, isActive: Bool = false) -> some View {
-        modifier(ControlChrome(isFocused: isFocused, isActive: isActive))
+    func controlChrome(
+        isFocused: Bool,
+        isActive: Bool = false,
+        focusedBackground: Color? = nil,
+        focusedBorder: Color? = nil
+    ) -> some View {
+        modifier(ControlChrome(
+            isFocused: isFocused,
+            isActive: isActive,
+            focusedBackground: focusedBackground,
+            focusedBorder: focusedBorder
+        ))
     }
 
     /// Binds a control to the dashboard focus state AND tags it with a matching
@@ -101,6 +111,8 @@ struct ControlChrome: ViewModifier {
     @EnvironmentObject private var store: DashboardStore
     let isFocused: Bool
     let isActive: Bool
+    let focusedBackground: Color?
+    let focusedBorder: Color?
 
     func body(content: Content) -> some View {
         content
@@ -118,13 +130,13 @@ struct ControlChrome: ViewModifier {
     }
 
     private var background: Color {
-        if isFocused { return store.theme.highlight.color }
+        if isFocused { return focusedBackground ?? store.theme.highlight.color }
         if isActive { return store.theme.accent.color }
         return store.theme.panelSoft.color.opacity(0.46)
     }
 
     private var border: Color {
-        if isFocused { return store.theme.highlight.color }
+        if isFocused { return focusedBorder ?? store.theme.highlight.color }
         if isActive { return store.theme.accent.color }
         return store.theme.borderColor
     }
@@ -227,6 +239,8 @@ struct ControlButton: View {
     let symbol: String
     let isFocused: Bool
     var isActive = false
+    var focusedBackground: Color? = nil
+    var focusedBorder: Color? = nil
     let action: () -> Void
 
     var body: some View {
@@ -241,7 +255,12 @@ struct ControlButton: View {
         // Fill the frame we're given so the chrome (border/bg) fills a square
         // slot instead of shrinking to content height and leaving a gap.
         .frame(maxWidth: .infinity, minHeight: 70, maxHeight: .infinity)
-        .controlChrome(isFocused: isFocused, isActive: isActive)
+        .controlChrome(
+            isFocused: isFocused,
+            isActive: isActive,
+            focusedBackground: focusedBackground,
+            focusedBorder: focusedBorder
+        )
         .contentShape(Rectangle())
         .focusable(true)
         .focusEffectDisabled()

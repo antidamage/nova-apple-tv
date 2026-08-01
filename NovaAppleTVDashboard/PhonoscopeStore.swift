@@ -15,7 +15,11 @@ final class PhonoscopeStore: ObservableObject {
     @Published private(set) var activeColorTheme: PhonoscopeColorTheme?
     @Published private(set) var resolvedModuleSettings: [String: Double] = [:]
     @Published private(set) var driverInterpolatedSettingIDs: Set<String> = []
+    @Published private(set) var messageScale = 1.0
     @Published private(set) var housePartyEnabled = false
+    @Published private(set) var themeSwitchingPaused = false
+    @Published private(set) var themeInterpolationPaused = false
+    @Published private(set) var themeTransitionDurationOverride: Double?
 
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
@@ -54,11 +58,18 @@ final class PhonoscopeStore: ObservableObject {
     private var housePartyImmediatePending = false
     private var housePartyForcePending = false
     private var songSkipInFlight = false
+    private var themePausedAt: Date?
+    private var themeInterpolationPausedAt: Date?
+    private var manualThemeTransition: (from: DashboardTheme, to: DashboardTheme, started: Date)?
+    private var themeSelectionTransitionStarted = Date.distantPast
+    private var themeSelectionTransitionDuration = 0.0
+    private var themeSelectionTransitionForward = true
     private struct ParameterDriverState {
         var current: Double
         var target: Double
         var eventKey: String
         var lastUpdated: Date
+        var holdUntil: Date
     }
     private var parameterDriverStates: [String: ParameterDriverState] = [:]
 
@@ -161,6 +172,48 @@ final class PhonoscopeStore: ObservableObject {
                 self.errorMessage = "PLAYBACK CONTROL UNAVAILABLE"
             }
         }
+    }
+
+    func toggleThemeSwitching() {
+        let now = Date()
+        themeSwitchingPaused.toggle()
+        if themeSwitchingPaused {
+            themePausedAt = now
+            themeInterpolationPausedAt = now
+            themeInterpolationPaused = true
+        } else if let pausedAt = themePausedAt {
+            let pauseDuration = now.timeIntervalSince(pausedAt)
+            lastWholeThemeChange = lastWholeThemeChange.addingTimeInterval(pauseDuration)
+            variantTransitionStart = variantTransitionStart.addingTimeInterval(pauseDuration)
+            themePausedAt = nil
+            if let interpolationPausedAt = themeInterpolationPausedAt,
+               var transition = manualThemeTransition {
+                transition.started = transition.started.addingTimeInterval(
+                    now.timeIntervalSince(interpolationPausedAt)
+                )
+                manualThemeTransition = transition
+            }
+            themeInterpolationPausedAt = nil
+            themeInterpolationPaused = false
+        }
+        lastThemeAdvance = now
+    }
+
+    func stepTheme(forward: Bool) {
+        let now = Date()
+        if !themeSwitchingPaused {
+            themeSwitchingPaused = true
+            themePausedAt = now
+        }
+        guard let target = selectManualTheme(forward: forward) else { return }
+        let source = visualizerTheme ?? target
+        themeTarget = target
+        currentThemeBroadcastTransitionSeconds = 1
+        manualThemeTransition = (source, target, now)
+        themeTransitionDurationOverride = 1
+        themeInterpolationPausedAt = nil
+        themeInterpolationPaused = false
+        lastThemeAdvance = now
     }
 
     private func runHouseParty(generation: Int) async {
@@ -544,6 +597,7 @@ final class PhonoscopeStore: ObservableObject {
     }
 
     var settingTransitionSeconds: Double {
+        if let themeTransitionDurationOverride { return themeTransitionDurationOverride }
         if configuration?.editorPreviewColorThemeId?.isEmpty == false { return 0.05 }
         if let group = activeColorGroup { return group.transitionSeconds }
         return activeThemeGroup?.transitionSeconds ?? Double(configuration?.transitionMs ?? 600) / 1_000
@@ -564,6 +618,64 @@ final class PhonoscopeStore: ObservableObject {
 
     private func normalizedGenre(_ value: String) -> String {
         value.lowercased().filter(\.isLetter)
+    }
+
+    private func selectManualTheme(forward: Bool) -> DashboardTheme? {
+        let now = Date()
+        let selectionInProgress = now.timeIntervalSince(themeSelectionTransitionStarted)
+            < themeSelectionTransitionDuration
+
+        func destinationIndex(current: Int?, count: Int) -> Int {
+            guard let current else { return forward ? 0 : count - 1 }
+            if selectionInProgress, forward == themeSelectionTransitionForward {
+                return current
+            }
+            return (current + (forward ? 1 : -1) + count) % count
+        }
+
+        if let group = activeColorGroup {
+            let candidates = group.themes
+            guard !candidates.isEmpty else { return nil }
+            let currentIndex = currentColorThemeID.flatMap { id in candidates.firstIndex { $0.id == id } }
+            let nextIndex = destinationIndex(current: currentIndex, count: candidates.count)
+            let next = candidates[nextIndex]
+            currentThemeEntry = nil
+            currentThemeVariant = nil
+            currentColorThemeID = next.id
+            activeColorTheme = next
+            lastWholeThemeChange = Date()
+            lastWholeThemeBarIndex = signal.barIndex
+            parameterDriverStates = [:]
+            refreshResolvedSettings()
+            themeSelectionTransitionStarted = now
+            themeSelectionTransitionDuration = 1
+            themeSelectionTransitionForward = forward
+            return dashboardTheme(for: next)
+        }
+
+        guard let group = activeThemeGroup else { return nil }
+        let candidates = matchingEntries(group)
+        guard !candidates.isEmpty else { return nil }
+        let currentIndex = currentThemeEntry.flatMap { current in
+            candidates.firstIndex { $0.themeId == current.themeId }
+        }
+        let nextIndex = destinationIndex(current: currentIndex, count: candidates.count)
+        let next = candidates[nextIndex]
+        guard let saved = themeLibrary.first(where: { $0.id == next.themeId }),
+              let resolved = saved.themeSet.resolved(variant: next.baseVariant)
+        else { return nil }
+        currentThemeEntry = next
+        currentThemeVariant = next.baseVariant
+        lastWholeThemeChange = Date()
+        lastWholeThemeBarIndex = signal.barIndex
+        lastVariantBarIndex = signal.barIndex
+        variantBlendFrom = 0
+        variantBlendTarget = 0
+        variantTransitionStart = Date()
+        themeSelectionTransitionStarted = now
+        themeSelectionTransitionDuration = 1
+        themeSelectionTransitionForward = forward
+        return DashboardTheme(sharedTheme: resolved)
     }
 
     private func selectNextTheme(force: Bool) {
@@ -595,6 +707,9 @@ final class PhonoscopeStore: ObservableObject {
             currentThemeBroadcastTransitionSeconds = group.transitionSeconds
             let target = dashboardTheme(for: next)
             themeTarget = target
+            themeSelectionTransitionStarted = Date()
+            themeSelectionTransitionDuration = max(0, group.transitionSeconds)
+            themeSelectionTransitionForward = true
             lastWholeThemeChange = Date()
             lastWholeThemeBarIndex = signal.barIndex
             parameterDriverStates = [:]
@@ -631,6 +746,9 @@ final class PhonoscopeStore: ObservableObject {
         else { return }
         let target = DashboardTheme(sharedTheme: resolved)
         themeTarget = target
+        themeSelectionTransitionStarted = Date()
+        themeSelectionTransitionDuration = max(0, group.transitionSeconds)
+        themeSelectionTransitionForward = true
         lastWholeThemeChange = Date()
         lastWholeThemeBarIndex = signal.barIndex
         lastVariantBarIndex = signal.barIndex
@@ -643,6 +761,35 @@ final class PhonoscopeStore: ObservableObject {
         let now = Date()
         let delta = max(0, min(0.25, now.timeIntervalSince(lastThemeAdvance)))
         lastThemeAdvance = now
+        if themeInterpolationPaused { return }
+        if let transition = manualThemeTransition {
+            let progress = min(1, max(0, now.timeIntervalSince(transition.started)))
+            let eased = progress * progress * (3 - 2 * progress)
+            visualizerTheme = transition.from.mixed(with: transition.to, amount: eased)
+            if progress >= 1 {
+                visualizerTheme = transition.to
+                manualThemeTransition = nil
+                // Let the renderer consume the exact target with a zero-duration
+                // update before freezing its independently interpolated palette
+                // and parameter values at the same endpoint.
+                themeTransitionDurationOverride = 0
+                lastWholeThemeChange = now
+                if themeSwitchingPaused {
+                    themePausedAt = now
+                    Task { @MainActor [weak self] in
+                        try? await Task.sleep(for: .milliseconds(50))
+                        guard let self, self.themeSwitchingPaused,
+                              self.manualThemeTransition == nil else { return }
+                        self.themeInterpolationPaused = true
+                        self.themeTransitionDurationOverride = nil
+                    }
+                } else {
+                    themeTransitionDurationOverride = nil
+                }
+            }
+            return
+        }
+        guard !themeSwitchingPaused else { return }
         func chase(_ target: DashboardTheme, duration: Double) {
             let amount = phonoscopeChaseAmount(delta: delta, settlingDuration: duration)
             visualizerTheme = (visualizerTheme ?? target).mixed(with: target, amount: amount)
@@ -739,6 +886,20 @@ final class PhonoscopeStore: ObservableObject {
     }
 
     private func refreshResolvedSettings() {
+        let messageScaleSetting = PhonoscopeModuleSetting(
+            id: "messageScale", label: "Message scale", description: nil,
+            control: "slider", min: 1, max: 3, step: 0.001, default: 1,
+            affects: nil, curve: nil, options: nil, section: nil, updateMode: "smooth"
+        )
+        messageScale = resolvedValue(
+            source: configuration?.messageScaleSource ?? PhonoscopeParameterSource(
+                type: "manual", value: 1, min: nil, max: nil, cadence: nil,
+                intervalSeconds: nil, transitionSeconds: nil, attackSeconds: nil, holdSeconds: nil, releaseSeconds: nil
+            ),
+            setting: messageScaleSetting,
+            baseline: 1,
+            key: "visualiser:messageScale"
+        )
         guard let module else {
             resolvedModuleSettings = [:]
             driverInterpolatedSettingIDs = []
@@ -809,7 +970,8 @@ final class PhonoscopeStore: ObservableObject {
             current: lower,
             target: lower,
             eventKey: "",
-            lastUpdated: now
+            lastUpdated: now,
+            holdUntil: now
         )
         let delta = max(1.0 / 120.0, min(0.25, signal.delta))
         if source.type == "random" {
@@ -843,11 +1005,31 @@ final class PhonoscopeStore: ObservableObject {
             default: driver = 0
             }
             state.target = lower + (upper - lower) * max(0, min(1, driver))
-            let seconds = state.target >= state.current
+            let attacking = state.target >= state.current
+            if attacking {
+                state.holdUntil = now.addingTimeInterval(max(0, source.holdSeconds ?? 0))
+            }
+            let holding = !attacking && now < state.holdUntil
+            let seconds = attacking
                 ? max(0, source.attackSeconds ?? 0.05)
-                : max(0.05, source.releaseSeconds ?? 0.6)
-            let amount = seconds == 0 ? 1 : min(1, delta / seconds)
-            state.current += (state.target - state.current) * amount
+                : max(0, source.releaseSeconds ?? 0.6)
+            if holding {
+                // Preserve the attained level until the configured hold phase
+                // ends; the release ramp begins from this exact value.
+            } else if seconds == 0 {
+                state.current = state.target
+            } else {
+                // Attack and release are full-range ramp durations, not hold or
+                // exponential settling times. Partial target changes therefore
+                // consume the corresponding fraction of the configured time.
+                let fullRange = max(Double.ulpOfOne, upper - lower)
+                let step = fullRange * delta / seconds
+                if state.target >= state.current {
+                    state.current = min(state.target, state.current + step)
+                } else {
+                    state.current = max(state.target, state.current - step)
+                }
+            }
         }
         state.lastUpdated = now
         parameterDriverStates[key] = state

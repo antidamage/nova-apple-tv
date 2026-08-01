@@ -50,6 +50,7 @@ struct MetalPhonoscopeView: UIViewRepresentable {
     let paletteColors: [String: SIMD4<Float>]
     let quality: String
     let transitionDuration: Double
+    let transitionPaused: Bool
     let reloadGeneration: Int
     let letterboxedBackground: Bool
 
@@ -86,6 +87,7 @@ struct MetalPhonoscopeView: UIViewRepresentable {
             driverInterpolatedSettings: driverInterpolatedSettings,
             palette: palette,
             transitionDuration: transitionDuration,
+            transitionPaused: transitionPaused,
             reloadGeneration: reloadGeneration
         )
         return view
@@ -105,6 +107,7 @@ struct MetalPhonoscopeView: UIViewRepresentable {
             driverInterpolatedSettings: driverInterpolatedSettings,
             palette: palette,
             transitionDuration: transitionDuration,
+            transitionPaused: transitionPaused,
             reloadGeneration: reloadGeneration
         )
     }

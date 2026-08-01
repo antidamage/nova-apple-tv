@@ -553,9 +553,17 @@ A Metal-rendered animated field that mirrors the web dashboard's background.
   that state for polling clients. Track changes, play/pause changes, resets, and
   seeks of at least 650 ms bypass normal frame suppression and publish
   immediately instead of waiting for the periodic keepalive.
-- The remote-revealed House Party action bar stays visually subordinate to the
-  visualiser: a fixed dark-charcoal surface, 75% grey label, plain button style,
-  and disabled tvOS focus effect so focus cannot replace it with a white plate.
+- Swiping up reveals the House Party action bar. It stays visually subordinate
+  to the visualiser with an identical dark-charcoal focused and unfocused
+  surface, a 75% grey label, and no tvOS focus effect. The bar dismisses as soon
+  as its action loses focus.
+- Swiping down reveals a three-button theme transport at the top of the
+  visualiser. Previous and next select the adjacent configured theme using a
+  one-second interpolation; pause freezes the current interpolated frame and
+  resume continues from that exact frame. Manual selection while paused lands
+  on the adjacent theme and remains paused. The transport uses a charcoal panel
+  and charcoal focused control with the dashboard highlight colour as its focus
+  outline, and dismisses when none of its buttons retains focus.
 
 ---
 

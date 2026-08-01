@@ -164,6 +164,7 @@ struct PhonoscopeConfiguration: Decodable, Equatable {
     let idleBehavior: String
     let quality: String
     let message: String?
+    let messageScaleSource: PhonoscopeParameterSource?
     let statusOverlay: Bool
     let transitionMs: Int
     let providers: PhonoscopeProviderConfig
@@ -213,6 +214,7 @@ struct PhonoscopeParameterSource: Decodable, Equatable {
     let intervalSeconds: Double?
     let transitionSeconds: Double?
     let attackSeconds: Double?
+    let holdSeconds: Double?
     let releaseSeconds: Double?
 }
 
