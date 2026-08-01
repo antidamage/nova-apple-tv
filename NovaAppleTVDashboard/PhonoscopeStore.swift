@@ -70,6 +70,7 @@ final class PhonoscopeStore: ObservableObject {
         var eventKey: String
         var lastUpdated: Date
         var holdUntil: Date
+        var wasAttacking: Bool
     }
     private var parameterDriverStates: [String: ParameterDriverState] = [:]
 
@@ -89,7 +90,10 @@ final class PhonoscopeStore: ObservableObject {
             await self.authorizeIfNeeded()
             while !Task.isCancelled {
                 await self.refreshPlayback()
-                try? await Task.sleep(for: .milliseconds(250))
+                // Parameter drivers feed the 60 Hz simulation. Sampling them at
+                // the old 4 Hz polling cadence visibly quantized otherwise
+                // smooth attack/release ramps before they reached Metal.
+                try? await Task.sleep(for: .milliseconds(16))
             }
         }
         themeTask = Task { [weak self] in
@@ -957,21 +961,27 @@ final class PhonoscopeStore: ObservableObject {
         baseline: Double,
         key: String
     ) -> Double {
-        func clamped(_ value: Double) -> Double {
-            let bounded = max(setting.min, min(setting.max, value))
+        func bounded(_ value: Double) -> Double {
+            max(setting.min, min(setting.max, value))
+        }
+        func configured(_ value: Double) -> Double {
+            let bounded = bounded(value)
             guard setting.step > 0 else { return bounded }
             return max(setting.min, min(setting.max, setting.min + ((bounded - setting.min) / setting.step).rounded() * setting.step))
         }
-        if source.type == "manual" { return clamped(source.value ?? baseline) }
-        let lower = clamped(source.min ?? baseline)
-        let upper = max(lower, clamped(source.max ?? baseline))
+        if source.type == "manual" { return configured(source.value ?? baseline) }
+        // Steps describe editable endpoint precision, not runtime animation
+        // precision. Driven outputs remain continuous between those endpoints.
+        let lower = configured(source.min ?? baseline)
+        let upper = max(lower, configured(source.max ?? baseline))
         let now = Date()
         var state = parameterDriverStates[key] ?? ParameterDriverState(
             current: lower,
             target: lower,
             eventKey: "",
             lastUpdated: now,
-            holdUntil: now
+            holdUntil: now,
+            wasAttacking: false
         )
         let delta = max(1.0 / 120.0, min(0.25, signal.delta))
         if source.type == "random" {
@@ -1005,9 +1015,24 @@ final class PhonoscopeStore: ObservableObject {
             default: driver = 0
             }
             state.target = lower + (upper - lower) * max(0, min(1, driver))
+            let signalEventKey: String
+            switch source.type {
+            case "downbeat": signalEventKey = "bar:\(signal.barIndex)"
+            default: signalEventKey = "beat:\(signal.beatIndex)"
+            }
+            let newSignalEvent = signalEventKey != state.eventKey
+            if newSignalEvent {
+                // A fresh beat/bass observation supersedes an older envelope,
+                // including a hold or release already in progress.
+                state.eventKey = signalEventKey
+                state.holdUntil = now
+            }
             let attacking = state.target >= state.current
             if attacking {
+                state.wasAttacking = true
+            } else if state.wasAttacking && !newSignalEvent {
                 state.holdUntil = now.addingTimeInterval(max(0, source.holdSeconds ?? 0))
+                state.wasAttacking = false
             }
             let holding = !attacking && now < state.holdUntil
             let seconds = attacking
@@ -1033,7 +1058,7 @@ final class PhonoscopeStore: ObservableObject {
         }
         state.lastUpdated = now
         parameterDriverStates[key] = state
-        return clamped(state.current)
+        return bounded(state.current)
     }
 
     private func resolveTrack(_ identity: PhonoscopeTrackIdentity) async {
