@@ -9,6 +9,8 @@ struct FluidBackgroundView: UIViewRepresentable {
     var blobScale: Float = 1
     var blobSoftness: Float = 1
     var allowsDisplacementTexture: Bool = true
+    var animationSpeed: Float = 1
+    var renderScale: CGFloat = 1
 
     func makeCoordinator() -> FluidBackgroundCoordinator {
         FluidBackgroundCoordinator()
@@ -28,13 +30,17 @@ struct FluidBackgroundView: UIViewRepresentable {
         renderer.blobScale = blobScale
         renderer.blobSoftness = blobSoftness
         renderer.allowsDisplacementTexture = allowsDisplacementTexture
-        let view = MTKView(frame: .zero, device: device)
+        renderer.animationSpeed = animationSpeed
+        let view = FluidBackgroundMTKView(frame: .zero, device: device)
+        view.renderScale = renderScale
         view.backgroundColor = UIColor(theme.background.color)
         view.clearColor = theme.clearColor
         view.colorPixelFormat = .bgra8Unorm
         view.framebufferOnly = true
         view.isOpaque = true
-        view.preferredFramesPerSecond = 30
+        view.preferredFramesPerSecond = fluidBackgroundFrameRate
+        view.layer.magnificationFilter = .linear
+        view.layer.minificationFilter = .linear
         view.enableSetNeedsDisplay = false
         view.isPaused = false
         view.delegate = renderer
@@ -47,9 +53,59 @@ struct FluidBackgroundView: UIViewRepresentable {
         context.coordinator.renderer?.blobScale = blobScale
         context.coordinator.renderer?.blobSoftness = blobSoftness
         context.coordinator.renderer?.allowsDisplacementTexture = allowsDisplacementTexture
+        context.coordinator.renderer?.animationSpeed = animationSpeed
         if let view = uiView as? MTKView {
             view.backgroundColor = UIColor(theme.background.color)
             view.clearColor = theme.clearColor
+            view.preferredFramesPerSecond = fluidBackgroundFrameRate
+        }
+        if let view = uiView as? FluidBackgroundMTKView {
+            view.renderScale = renderScale
+        }
+    }
+}
+
+// The fluid background is deliberately fixed rather than configurable. Its
+// refresh rate made no measurable difference to the visualiser's frame rate, so
+// every surface renders it at the highest rate the design ever used.
+let fluidBackgroundFrameRate = 60
+
+func fluidDrawableSize(bounds: CGSize, nativeScale: CGFloat, renderScale: CGFloat) -> CGSize {
+    let scale = max(0.125, min(1, renderScale)) * max(1, nativeScale)
+    return CGSize(
+        width: max(1, (bounds.width * scale).rounded()),
+        height: max(1, (bounds.height * scale).rounded())
+    )
+}
+
+final class FluidBackgroundMTKView: MTKView {
+    var renderScale: CGFloat = 1 {
+        didSet { updateDrawableSize() }
+    }
+
+    override init(frame frameRect: CGRect, device: MTLDevice?) {
+        super.init(frame: frameRect, device: device)
+        autoResizeDrawable = false
+    }
+
+    required init(coder: NSCoder) {
+        super.init(coder: coder)
+        autoResizeDrawable = false
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        updateDrawableSize()
+    }
+
+    private func updateDrawableSize() {
+        let next = fluidDrawableSize(
+            bounds: bounds.size,
+            nativeScale: contentScaleFactor,
+            renderScale: renderScale
+        )
+        if abs(next.width - drawableSize.width) > 1 || abs(next.height - drawableSize.height) > 1 {
+            drawableSize = next
         }
     }
 }
@@ -93,12 +149,20 @@ final class FluidBackgroundRenderer: NSObject, MTKViewDelegate {
     private let commandQueue: MTLCommandQueue
     private let pipelineState: MTLRenderPipelineState
     private let textureLoader: MTKTextureLoader
-    private let startTime = CACurrentMediaTime()
+    // The shader is driven by an *accumulated* phase, not `elapsed * speed`.
+    // Multiplying a running clock by a live speed makes the phase jump every
+    // time the speed moves -- and `fluid_speed` is a driven/chased setting, so
+    // it moves every frame. That is the "jolting all over" symptom. Integrating
+    // `dt * speed` keeps the motion continuous through any speed change, and a
+    // speed of 0 simply holds the current phase instead of resetting it.
+    private var phase: Double = 0
+    private var lastTick: CFTimeInterval?
     var theme = DashboardTheme.default
     var baseURL: URL = AppConfig.dashboardBaseURL
     var blobScale: Float = 1
     var blobSoftness: Float = 1
     var allowsDisplacementTexture = true
+    var animationSpeed: Float = 1
 
     private var mosaicTexture: MTLTexture?
     private var loadedTextureKey: String?
@@ -131,8 +195,19 @@ final class FluidBackgroundRenderer: NSObject, MTKViewDelegate {
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
+    private func advancePhase() {
+        let now = CACurrentMediaTime()
+        defer { lastTick = now }
+        guard let lastTick else { return }
+        // Clamp the step so a stall (backgrounding, a long texture decode) can
+        // never launch the field forward by seconds in a single frame.
+        let delta = min(0.25, max(0, now - lastTick))
+        phase += delta * Double(max(0, animationSpeed))
+    }
+
     func draw(in view: MTKView) {
         updateMosaicTextureIfNeeded()
+        advancePhase()
 
         guard let drawable = view.currentDrawable,
               let descriptor = view.currentRenderPassDescriptor,
@@ -146,7 +221,7 @@ final class FluidBackgroundRenderer: NSObject, MTKViewDelegate {
         let uiScaleMultiplier = Self.targetDPR / scale
 
         var uniforms = FluidBackgroundUniforms(
-            time: Float(CACurrentMediaTime() - startTime),
+            time: Float(phase),
             resolution: SIMD2(Float(view.drawableSize.width), Float(view.drawableSize.height)),
             background: theme.background.vector,
             accent: theme.accent.vector,

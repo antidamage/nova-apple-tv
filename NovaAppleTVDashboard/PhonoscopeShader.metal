@@ -28,6 +28,7 @@ struct PhonoscopeVertexOut {
     float glow;
     float primitive;
     float material;
+    float effectScale;
 };
 
 struct PhonoscopeFullscreenOut {
@@ -68,6 +69,9 @@ vertex PhonoscopeVertexOut phonoscope_vertex(
         p.xy = (p.xy - center) / extent;
     }
     float aspect = max(0.01, uniforms.viewport.x / max(1.0, uniforms.viewport.y));
+    // The scene was authored against a 1080-line drawable. Only effects grow
+    // with the output resolution: dot cores and grid-wire widths stay fixed.
+    float effectScale = max(1.0, uniforms.viewport.y / 1080.0);
 
     PhonoscopeVertexOut out;
     if (particle.meta.y > 5.5 && particle.trail.w > 0.0) {
@@ -105,20 +109,22 @@ vertex PhonoscopeVertexOut phonoscope_vertex(
         float progress = (corners[vertexID].x + 1.0) * 0.5;
         float sourceRadius = particle.positionSize.w;
         float2 trailHead = p.xy - clipDirection * sourceRadius * 0.9;
-        float2 trailTail = trailHead - clipDirection * sourceRadius * particle.trail.w;
+        float2 trailTail = trailHead - clipDirection * sourceRadius * particle.trail.w * effectScale;
         float2 trailCenter = mix(trailTail, trailHead, progress);
-        float halfWidth = sourceRadius * progress;
+        float halfWidth = sourceRadius * progress * effectScale;
         out.position = float4(
             trailCenter + clipNormal * corners[vertexID].y * halfWidth,
             0,
             1
         );
     } else {
-        float2 offset = corners[vertexID] * particle.positionSize.w;
+        float2 offset = corners[vertexID] * particle.positionSize.w * effectScale;
         offset.x /= aspect;
         out.position = float4(p.xy + offset, 0, 1);
     }
-    out.local = corners[vertexID];
+    // Expanding both the quad and local space keeps the core at its authored
+    // radius while giving its exponential halo more pixels to occupy.
+    out.local = particle.meta.y < 4.5 ? corners[vertexID] * effectScale : corners[vertexID];
     out.color = particle.color;
     out.colorEnd = particle.colorEnd;
     out.glowColor = particle.glowColor;
@@ -126,6 +132,7 @@ vertex PhonoscopeVertexOut phonoscope_vertex(
     out.glow = particle.meta.x;
     out.primitive = particle.meta.y;
     out.material = particle.meta.z;
+    out.effectScale = effectScale;
     return out;
 }
 
@@ -134,26 +141,29 @@ fragment float4 phonoscope_fragment(PhonoscopeVertexOut in [[stage_in]]) {
     float gradientProgress = clamp(radius, 0.0, 1.0);
     float core;
     float halo;
+    float haloRadius = radius / max(1.0, in.effectScale);
     if (in.primitive < 0.5) {
-        if (radius > 1.0) discard_fragment();
+        if (radius > in.effectScale) discard_fragment();
         core = smoothstep(1.0, 0.08, radius);
-        halo = exp(-radius * radius * 3.2) * in.glow;
+        halo = exp(-haloRadius * haloRadius * 3.2) * in.glow;
     } else if (in.primitive < 1.5) {
-        if (radius > 1.0) discard_fragment();
+        if (radius > in.effectScale) discard_fragment();
         core = smoothstep(0.16, 0.02, abs(radius - 0.70));
-        halo = exp(-radius * radius * 3.2) * in.glow;
+        halo = exp(-haloRadius * haloRadius * 3.2) * in.glow;
     } else if (in.primitive < 2.5) {
         core = smoothstep(1.0, 0.78, max(abs(in.local.x), abs(in.local.y)));
-        halo = exp(-radius * radius * 3.2) * in.glow;
+        halo = exp(-haloRadius * haloRadius * 3.2) * in.glow;
     } else if (in.primitive < 3.5) {
         float edge = 1.0 - abs(in.local.x);
-        if (in.local.y < -1.0 || in.local.y > edge * 2.0 - 1.0) discard_fragment();
-        core = smoothstep(0.08, 0.22, min(in.local.y + 1.0, edge * 2.0 - 1.0 - in.local.y));
-        halo = exp(-radius * radius * 3.2) * in.glow;
+        bool insideCore = in.local.y >= -1.0 && in.local.y <= edge * 2.0 - 1.0;
+        core = insideCore
+            ? smoothstep(0.08, 0.22, min(in.local.y + 1.0, edge * 2.0 - 1.0 - in.local.y))
+            : 0.0;
+        halo = exp(-haloRadius * haloRadius * 3.2) * in.glow;
     } else if (in.primitive < 4.5) {
         float edge = max(abs(in.local.x), abs(in.local.y));
         core = smoothstep(0.15, 0.015, abs(edge - 0.82));
-        halo = exp(-radius * radius * 3.2) * in.glow;
+        halo = exp(-haloRadius * haloRadius * 3.2) * in.glow;
     } else if (in.primitive < 5.5) {
         float progress = clamp((in.local.x + 1.0) * 0.5, 0.0, 1.0);
         // A trail starts at the dot (the quad's head at progress 1) and ends
@@ -222,7 +232,16 @@ fragment float4 phonoscope_bloom_extract(
     float4 sample = source.sample(linearSampler, in.uv);
     float brightness = max(sample.r, max(sample.g, sample.b));
     float contribution = max(0.0, brightness - 0.16);
-    return float4(sample.rgb * contribution * 1.45, contribution);
+    // Alpha is coverage -- how much of the background this pixel hides -- and a
+    // glow hides nothing: it is light added on top of whatever is behind it.
+    // This used to carry `contribution`, an unbounded HDR value, which the
+    // composite then read as coverage and saturated to 1, erasing the
+    // background colour in a wide halo around everything bright. The scene pass
+    // alone decides coverage; bloom only ever adds colour.
+    //
+    // Mirrors nova-visualiser/src/shaders/bloom_extract.frag. Both engines
+    // implement PHONOSCOPE_MODULE_SPEC.md, so this pair must change together.
+    return float4(sample.rgb * contribution * 1.45, 0.0);
 }
 
 fragment float4 phonoscope_bloom_blur(
@@ -249,10 +268,88 @@ fragment float4 phonoscope_composite(
     float4 base = scene.sample(linearSampler, in.uv);
     float4 glow = bloom.sample(linearSampler, in.uv) * uniforms.intensity;
     float3 foreground = base.rgb + glow.rgb;
-    float foregroundAlpha = clamp(max(base.a, glow.a), 0.0, 1.0);
+    // Coverage comes from the scene pass alone. Bloom is additive light and
+    // occludes nothing, so folding its alpha in here (as `max(base.a, glow.a)`)
+    // made every bright halo read as fully covered and cut the background out
+    // around it. Mirrors nova-visualiser/src/shaders/composite.frag; the two
+    // engines must agree, and tests/conformance/composite locks the formula.
+    float foregroundAlpha = clamp(base.a, 0.0, 1.0);
     float backgroundAlpha = clamp(uniforms.background.a, 0.0, 1.0);
     float3 color = foreground
         + uniforms.background.rgb * backgroundAlpha * (1.0 - foregroundAlpha);
     float alpha = foregroundAlpha + backgroundAlpha * (1.0 - foregroundAlpha);
     return float4(clamp(color, 0.0, 1.0), clamp(alpha, 0.0, 1.0));
+}
+
+struct PhonoscopeGlowUniforms {
+    // Texel size on the blur axis only; the other component is zero. Unused by
+    // the overlay pass.
+    float2 axisTexel;
+    // Gaussian sigma, in texels of the quarter-resolution blur target.
+    float sigma;
+    // 0-1.
+    float opacity;
+    // 0 multiply, 1 screen.
+    int blendMode;
+};
+
+// One axis of the glow overlay's separable Gaussian.
+//
+// Taps sit at i * (sigma/3) texels for i in -6...6, covering ±2σ at any width.
+// Because the stride is proportional to sigma the weights are constant --
+// exp(-i²/18) -- so a parameter driver can move the blur every frame without
+// rebuilding a weight table. Mirrors nova-visualiser/src/shaders/glow_blur.frag
+// and the tap contract in src/core/glow_overlay_reference.h.
+fragment float4 phonoscope_glow_blur(
+    PhonoscopeFullscreenOut in [[stage_in]],
+    texture2d<float> source [[texture(0)]],
+    constant PhonoscopeGlowUniforms &uniforms [[buffer(0)]]
+) {
+    constexpr sampler linearSampler(address::clamp_to_edge, filter::linear);
+    float4 result = source.sample(linearSampler, in.uv);
+    float weightSum = 1.0;
+    // Sigma 0 collapses every tap onto the centre, so skip straight to the copy
+    // rather than summing thirteen identical samples.
+    if (uniforms.sigma > 0.0) {
+        float stride = uniforms.sigma / 3.0;
+        for (int tap = 1; tap <= 6; ++tap) {
+            float weight = exp(-float(tap * tap) / 18.0);
+            float2 offset = uniforms.axisTexel * (float(tap) * stride);
+            result += (source.sample(linearSampler, in.uv + offset)
+                       + source.sample(linearSampler, in.uv - offset)) * weight;
+            weightSum += weight * 2.0;
+        }
+    }
+    return result / weightSum;
+}
+
+// The last pass over the picture: a blurred copy of the finished frame laid
+// back over itself with a Photoshop blend mode.
+//
+// Mirrors nova-visualiser/src/shaders/glow_overlay.frag; the arithmetic is
+// locked by src/core/glow_overlay_reference.h and
+// tests/conformance/glow-overlay.
+fragment float4 phonoscope_glow_overlay(
+    PhonoscopeFullscreenOut in [[stage_in]],
+    texture2d<float> base [[texture(0)]],
+    texture2d<float> glow [[texture(1)]],
+    constant PhonoscopeGlowUniforms &uniforms [[buffer(0)]]
+) {
+    constexpr sampler linearSampler(address::clamp_to_edge, filter::linear);
+    float4 baseColor = base.sample(linearSampler, in.uv);
+    // Blend modes are defined on display-referred colour: an unclamped
+    // highlight would saturate `screen` to white across the whole frame and
+    // stop `multiply` from darkening anything.
+    float3 glowColor = clamp(glow.sample(linearSampler, in.uv).rgb, 0.0, 1.0);
+    float3 baseRgb = max(baseColor.rgb, float3(0.0));
+    float amount = clamp(uniforms.opacity, 0.0, 1.0);
+
+    float3 blended = uniforms.blendMode == 1
+        ? baseRgb + amount * (glowColor - baseRgb * glowColor)
+        : baseRgb * (1.0 - amount + glowColor * amount);
+
+    // Coverage passes through untouched: this is a look on the picture, not a
+    // layer of its own, and the letterboxed modules composite over a separate
+    // backdrop that must still show through.
+    return float4(blended, baseColor.a);
 }

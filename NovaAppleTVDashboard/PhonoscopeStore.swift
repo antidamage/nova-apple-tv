@@ -16,6 +16,8 @@ final class PhonoscopeStore: ObservableObject {
     @Published private(set) var resolvedModuleSettings: [String: Double] = [:]
     @Published private(set) var driverInterpolatedSettingIDs: Set<String> = []
     @Published private(set) var messageScale = 1.0
+    /// Final glow overlay, already resolved for this frame.
+    @Published private(set) var glowOverlay = PhonoscopeGlowOverlaySettings()
     @Published private(set) var housePartyEnabled = false
     @Published private(set) var themeSwitchingPaused = false
     @Published private(set) var themeInterpolationPaused = false
@@ -64,6 +66,8 @@ final class PhonoscopeStore: ObservableObject {
     private var themeSelectionTransitionStarted = Date.distantPast
     private var themeSelectionTransitionDuration = 0.0
     private var themeSelectionTransitionForward = true
+    private var authoritativeThemeRevision = -1
+    private var hasAuthoritativeThemeState = false
     private struct ParameterDriverState {
         var current: Double
         var target: Double
@@ -99,7 +103,10 @@ final class PhonoscopeStore: ObservableObject {
         themeTask = Task { [weak self] in
             while !Task.isCancelled {
                 self?.advanceTheme()
-                try? await Task.sleep(for: .milliseconds(33))
+                // 60Hz. This loop now carries the colour interpolation for
+                // broadcast-driven theme changes too, and at 33ms a fast
+                // transition was visibly stepped.
+                try? await Task.sleep(for: .milliseconds(16))
             }
         }
     }
@@ -122,6 +129,8 @@ final class PhonoscopeStore: ObservableObject {
         parameterDriverStates = [:]
         currentThemeVariant = nil
         themeTarget = nil
+        authoritativeThemeRevision = -1
+        hasAuthoritativeThemeState = false
     }
 
     func setHousePartyEnabled(_ enabled: Bool, fallbackTheme: DashboardTheme) {
@@ -179,45 +188,12 @@ final class PhonoscopeStore: ObservableObject {
     }
 
     func toggleThemeSwitching() {
-        let now = Date()
-        themeSwitchingPaused.toggle()
-        if themeSwitchingPaused {
-            themePausedAt = now
-            themeInterpolationPausedAt = now
-            themeInterpolationPaused = true
-        } else if let pausedAt = themePausedAt {
-            let pauseDuration = now.timeIntervalSince(pausedAt)
-            lastWholeThemeChange = lastWholeThemeChange.addingTimeInterval(pauseDuration)
-            variantTransitionStart = variantTransitionStart.addingTimeInterval(pauseDuration)
-            themePausedAt = nil
-            if let interpolationPausedAt = themeInterpolationPausedAt,
-               var transition = manualThemeTransition {
-                transition.started = transition.started.addingTimeInterval(
-                    now.timeIntervalSince(interpolationPausedAt)
-                )
-                manualThemeTransition = transition
-            }
-            themeInterpolationPausedAt = nil
-            themeInterpolationPaused = false
-        }
-        lastThemeAdvance = now
+        let action = themeSwitchingPaused ? "resume" : "pause"
+        Task { [weak self] in await self?.sendThemeCommand(action) }
     }
 
     func stepTheme(forward: Bool) {
-        let now = Date()
-        if !themeSwitchingPaused {
-            themeSwitchingPaused = true
-            themePausedAt = now
-        }
-        guard let target = selectManualTheme(forward: forward) else { return }
-        let source = visualizerTheme ?? target
-        themeTarget = target
-        currentThemeBroadcastTransitionSeconds = 1
-        manualThemeTransition = (source, target, now)
-        themeTransitionDurationOverride = 1
-        themeInterpolationPausedAt = nil
-        themeInterpolationPaused = false
-        lastThemeAdvance = now
+        Task { [weak self] in await self?.sendThemeCommand(forward ? "next" : "previous") }
     }
 
     private func runHouseParty(generation: Int) async {
@@ -488,10 +464,73 @@ final class PhonoscopeStore: ObservableObject {
                 selectNextTheme(force: true)
             }
             refreshResolvedSettings()
+            await refreshAuthoritativeTheme()
             errorMessage = nil
         } catch {
             if configuration == nil { errorMessage = "PHONOSCOPE CONFIG OFFLINE" }
         }
+    }
+
+    private func refreshAuthoritativeTheme() async {
+        do {
+            var request = URLRequest(url: preferredBaseURL.appendingPathComponent("api/phonoscope/theme"))
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            request.timeoutInterval = 2
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+                throw URLError(.badServerResponse)
+            }
+            applyAuthoritativeTheme(try decoder.decode(PhonoscopeThemeState.self, from: data))
+        } catch {
+            // Preserve the last state across a short dashboard outage. Only a
+            // cold client falls back to its local rotation implementation.
+        }
+    }
+
+    private func sendThemeCommand(_ action: String) async {
+        do {
+            var request = URLRequest(url: preferredBaseURL.appendingPathComponent("api/phonoscope/theme"))
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.timeoutInterval = 2
+            request.httpBody = try encoder.encode(["action": action])
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+                throw URLError(.badServerResponse)
+            }
+            applyAuthoritativeTheme(try decoder.decode(PhonoscopeThemeState.self, from: data))
+            errorMessage = nil
+        } catch {
+            errorMessage = "THEME CONTROL OFFLINE"
+        }
+    }
+
+    private func applyAuthoritativeTheme(_ state: PhonoscopeThemeState) {
+        hasAuthoritativeThemeState = true
+        themeSwitchingPaused = state.paused
+        guard state.revision != authoritativeThemeRevision else { return }
+        authoritativeThemeRevision = state.revision
+        guard let group = activeColorGroup,
+              group.id == state.groupId,
+              let selected = group.themes.first(where: { $0.id == state.themeId })
+        else { return }
+
+        currentThemeEntry = nil
+        currentThemeVariant = nil
+        currentColorThemeID = selected.id
+        activeColorTheme = selected
+        parameterDriverStates = [:]
+        let target = dashboardTheme(for: selected)
+        themeTarget = target
+        currentThemeBroadcastTransitionSeconds = state.transitionSeconds
+        // Only a cold client jumps straight to the endpoint; once a palette is
+        // on screen `advanceTheme` eases across to the new target over the
+        // broadcast transition duration.
+        if visualizerTheme == nil || state.transitionSeconds <= 0 {
+            visualizerTheme = target
+        }
+        themeTransitionDurationOverride = state.transitionSeconds
+        refreshResolvedSettings()
     }
 
     private func loadModule(id: String, version: String) async {
@@ -765,6 +804,26 @@ final class PhonoscopeStore: ObservableObject {
         let now = Date()
         let delta = max(0, min(0.25, now.timeIntervalSince(lastThemeAdvance)))
         lastThemeAdvance = now
+
+        // The dashboard owns runtime *selection*. Local rotation remains only
+        // as an offline fallback for an older Nova server -- but the
+        // interpolation still has to run here, because the authoritative state
+        // only ever hands over a new endpoint. Returning outright meant every
+        // broadcast rotation hard-cut the palette, which is what made the
+        // titles and every other theme-driven colour snap.
+        if hasAuthoritativeThemeState {
+            if themeInterpolationPaused { return }
+            if let target = themeTarget {
+                let amount = phonoscopeChaseAmount(
+                    delta: delta,
+                    settlingDuration: max(0, currentThemeBroadcastTransitionSeconds)
+                )
+                visualizerTheme = (visualizerTheme ?? target).mixed(with: target, amount: amount)
+            }
+            // No `refreshResolvedSettings()` here: the playback loop already
+            // recomputes it every 16ms in this mode.
+            return
+        }
         if themeInterpolationPaused { return }
         if let transition = manualThemeTransition {
             let progress = min(1, max(0, now.timeIntervalSince(transition.started)))
@@ -892,7 +951,7 @@ final class PhonoscopeStore: ObservableObject {
     private func refreshResolvedSettings() {
         let messageScaleSetting = PhonoscopeModuleSetting(
             id: "messageScale", label: "Message scale", description: nil,
-            control: "slider", min: 1, max: 3, step: 0.001, default: 1,
+            control: "slider", min: 0.1, max: 5, step: 0.1, default: 1,
             affects: nil, curve: nil, options: nil, section: nil, updateMode: "smooth"
         )
         messageScale = resolvedValue(
@@ -904,6 +963,59 @@ final class PhonoscopeStore: ObservableObject {
             baseline: 1,
             key: "visualiser:messageScale"
         )
+
+        // Glow overlay. Same private-setting path as the message scale: these
+        // belong to the picture rather than to any one module, so no module
+        // manifest declares them. Mirrors the `__glowBlur`/`__glowOpacity`/
+        // `__glowBlend` settings the streamed renderer resolves in Engine.cpp.
+        let manualZero = PhonoscopeParameterSource(
+            type: "manual", value: 0, min: nil, max: nil, cadence: nil,
+            intervalSeconds: nil, transitionSeconds: nil, attackSeconds: nil,
+            holdSeconds: nil, releaseSeconds: nil
+        )
+        let glowBlurSetting = PhonoscopeModuleSetting(
+            id: "glowBlur", label: "Glow blur", description: nil,
+            control: "slider", min: 0, max: 20, step: 0.1, default: 0,
+            affects: nil, curve: nil, options: nil, section: nil, updateMode: "smooth"
+        )
+        let glowOpacitySetting = PhonoscopeModuleSetting(
+            id: "glowOpacity", label: "Glow opacity", description: nil,
+            control: "slider", min: 0, max: 100, step: 0.1, default: 0,
+            affects: nil, curve: nil, options: nil, section: nil, updateMode: "smooth"
+        )
+        // Blend mode on a 0-1 axis: 0 screen, 1 multiply, cut at the midpoint.
+        // A step of 1 keeps the manual value and both driver endpoints on the
+        // two real modes; anything a driver produces in between is resolved by
+        // the threshold rather than cross-faded.
+        let glowBlendSetting = PhonoscopeModuleSetting(
+            id: "glowBlend", label: "Glow blend mode", description: nil,
+            control: "select", min: 0, max: 1, step: 1, default: 0,
+            affects: nil, curve: nil, options: nil, section: nil, updateMode: "smooth"
+        )
+        let glowConfig = configuration?.glowOverlay
+        glowOverlay = PhonoscopeGlowOverlaySettings(
+            blurAmount: resolvedValue(
+                source: glowConfig?.blurSource ?? manualZero,
+                setting: glowBlurSetting,
+                baseline: 0,
+                key: "visualiser:glowBlur"
+            ),
+            opacity: resolvedValue(
+                source: glowConfig?.opacitySource ?? manualZero,
+                setting: glowOpacitySetting,
+                baseline: 0,
+                key: "visualiser:glowOpacity"
+            ),
+            // Mirrors nova::glowBlendIsMultiply. An absent block resolves to 0
+            // and therefore to screen, matching the dashboard's default.
+            screenBlend: resolvedValue(
+                source: glowConfig?.blendModeSource ?? manualZero,
+                setting: glowBlendSetting,
+                baseline: 0,
+                key: "visualiser:glowBlend"
+            ) < PhonoscopeGlowOverlaySettings.multiplyBlendThreshold
+        )
+
         guard let module else {
             resolvedModuleSettings = [:]
             driverInterpolatedSettingIDs = []
@@ -1089,6 +1201,47 @@ final class PhonoscopeStore: ObservableObject {
         delta: Double
     ) -> PhonoscopeSignalFrame {
         let seed = stableSeed(identity.map { "\($0.artist)|\($0.title)|\($0.duration)" } ?? "ambient")
+
+        // Nothing playing means nothing to visualise. This used to keep
+        // synthesising beats and a full spectrum off an advancing idle
+        // position, so an idle screen animated as hard as a playing one --
+        // driving every audio-reactive parameter and every effect trigger for
+        // no audio at all. A resting drift now comes from a driver's floor
+        // rather than from a fake beat.
+        //
+        // PARITY: mirrors the `!playing` branch of `buildSignal` in
+        // nova-visualiser/src/core/signal.cpp. See PHONOSCOPE_MODULE_SPEC.md
+        // §11 -- the two engines must agree tick for tick.
+        guard playing else {
+            return PhonoscopeSignalFrame(
+                time: position,
+                delta: delta,
+                duration: identity?.duration ?? 0,
+                progress: 0,
+                playing: false,
+                // bpm/valence/quality keep their canonical idle-frame values;
+                // only the audio-reactive channels are zeroed. Every field here
+                // must match the C++ branch exactly or conformance diverges.
+                bpm: 72,
+                beatPhase: 0,
+                beatPulse: 0,
+                beatIndex: 0,
+                barPhase: 0,
+                barIndex: 0,
+                downbeatPulse: 0,
+                energy: 0,
+                valence: 0.5,
+                lyricProgress: 0,
+                lyricPulse: 0,
+                lyricIndex: -1,
+                lyricCurrent: "",
+                lyricNext: "",
+                spectrum: Array(repeating: 0, count: 32),
+                quality: .idle,
+                trackSeed: seed
+            )
+        }
+
         let fallbackBPM = 72 + Double(seed % 61)
         let bpm = analysis?.bpm ?? fallbackBPM
         let beatLength = 60 / max(20, bpm)

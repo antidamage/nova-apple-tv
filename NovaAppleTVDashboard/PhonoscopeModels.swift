@@ -158,13 +158,26 @@ struct PhonoscopeProviderConfig: Decodable, Equatable {
     let lrclib: Bool
 }
 
+/// The final glow-overlay layer, laid over the whole picture — including the
+/// centre message — as the last thing that happens to a frame.
+///
+/// Blur amount (0-20), opacity (0-100) and blend mode are all driven Phonoscope
+/// parameters, so they arrive as sources rather than numbers. The blend mode's
+/// axis runs 0-1 between Photoshop's two modes — 0 screen, 1 multiply — and
+/// cuts hard at the midpoint, so a driver can swap it on the beat.
+struct PhonoscopeGlowOverlayConfig: Decodable, Equatable {
+    let blendModeSource: PhonoscopeParameterSource?
+    let blurSource: PhonoscopeParameterSource?
+    let opacitySource: PhonoscopeParameterSource?
+}
+
 struct PhonoscopeConfiguration: Decodable, Equatable {
     let activeModuleId: String
     let activeModuleVersion: String
     let idleBehavior: String
-    let quality: String
     let message: String?
     let messageScaleSource: PhonoscopeParameterSource?
+    let glowOverlay: PhonoscopeGlowOverlayConfig?
     let statusOverlay: Bool
     let transitionMs: Int
     let providers: PhonoscopeProviderConfig
@@ -302,6 +315,18 @@ struct PhonoscopeConfigurationEnvelope: Decodable {
     let config: PhonoscopeConfiguration
     let modules: [PhonoscopeModuleSummary]
     let themeLibrary: PhonoscopeThemeLibrary?
+}
+
+/// Nova-owned runtime colour-theme selection. The streamed and fallback
+/// renderers consume the same id so reconnecting cannot reset or fork state.
+struct PhonoscopeThemeState: Decodable, Equatable {
+    let groupId: String
+    let themeId: String
+    let themeIndex: Int
+    let paused: Bool
+    let revision: Int
+    let changedAtMs: Double
+    let transitionSeconds: Double
 }
 
 struct PhonoscopeTimedLyric: Decodable, Equatable {

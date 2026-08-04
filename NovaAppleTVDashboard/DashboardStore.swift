@@ -118,7 +118,10 @@ final class DashboardStore: ObservableObject {
             if !followVisualizerWhenActive {
                 visualizerColorOverride = nil
             }
-            applyCurrentTheme()
+            // A server-side theme edit is a real colour change and should ease
+            // in like any other. Identical polls resolve to the same target and
+            // short-circuit, so this costs nothing in the steady state.
+            applyCurrentTheme(duration: 0.6)
             if let fraction = payload.layout?.tvHeightFraction {
                 layoutHeightFraction = clamped(fraction, 0.3, 0.95)
             }
@@ -127,23 +130,42 @@ final class DashboardStore: ObservableObject {
         }
     }
 
-    func setVisualizerColorOverride(_ override: DashboardTheme?) {
-        themeTransitionTask?.cancel()
-        themeTransitionTask = nil
+    /// `duration` defaults to 0 because the followed palette is already
+    /// interpolated by `PhonoscopeStore.advanceTheme`; ramping it again here
+    /// would only add lag. Pass a duration for discrete jumps -- entering or
+    /// leaving a follow.
+    func setVisualizerColorOverride(_ override: DashboardTheme?, duration: Double = 0) {
         visualizerColorOverride = followVisualizerWhenActive ? override : nil
-        applyCurrentTheme()
+        applyCurrentTheme(duration: duration)
     }
 
     func clearVisualizerColorOverride(duration: Double, delay: Double = 0) {
-        themeTransitionTask?.cancel()
         visualizerColorOverride = nil
-        guard duration > 0, theme != configuredTheme else {
-            theme = configuredTheme
+        applyCurrentTheme(duration: duration, delay: delay)
+    }
+
+    private func applyCurrentTheme(duration: Double = 0, delay: Double = 0) {
+        let target = visualizerColorOverride.map {
+            configuredTheme.colorMixed(with: $0, amount: 1)
+        } ?? configuredTheme
+        transitionTheme(to: target, duration: duration, delay: delay)
+    }
+
+    /// The single path by which `theme` ever changes. Every colour move --
+    /// entering a visualiser follow, each palette rotation while following,
+    /// leaving it, and a fresh `/api/theme` poll -- runs through this ramp.
+    /// Previously only the *exit* interpolated and the rest assigned `theme`
+    /// outright, which is why titles and every other theme-driven colour
+    /// snapped between palettes.
+    private func transitionTheme(to target: DashboardTheme, duration: Double, delay: Double = 0) {
+        themeTransitionTask?.cancel()
+        themeTransitionTask = nil
+        guard duration > 0, theme != target else {
+            theme = target
             return
         }
 
         let from = theme
-        let target = configuredTheme
         themeTransitionTask = Task { [weak self] in
             if delay > 0 {
                 try? await Task.sleep(for: .seconds(delay))
@@ -155,20 +177,14 @@ final class DashboardStore: ObservableObject {
                 let eased = progress * progress * (3 - 2 * progress)
                 self?.theme = from.colorMixed(with: target, amount: eased)
                 if progress >= 1 { break }
-                try? await Task.sleep(for: .milliseconds(33))
+                // ~60fps. At the old 33ms the ramp itself was visibly stepped
+                // on short transitions.
+                try? await Task.sleep(for: .milliseconds(16))
             }
             guard !Task.isCancelled else { return }
             self?.theme = target
             self?.themeTransitionTask = nil
         }
-    }
-
-    private func applyCurrentTheme() {
-        themeTransitionTask?.cancel()
-        themeTransitionTask = nil
-        theme = visualizerColorOverride.map {
-            configuredTheme.colorMixed(with: $0, amount: 1)
-        } ?? configuredTheme
     }
 
     func sendZoneAction(

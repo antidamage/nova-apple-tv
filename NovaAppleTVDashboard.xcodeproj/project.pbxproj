@@ -31,6 +31,8 @@
 		01A1B0320000000000000001 /* ParitySelfTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0320000000000000001 /* ParitySelfTests.swift */; };
 		01A1B0330000000000000001 /* PhonoscopeModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0330000000000000001 /* PhonoscopeModels.swift */; };
 		01A1B0340000000000000001 /* PhonoscopeExpression.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0340000000000000001 /* PhonoscopeExpression.swift */; };
+		01A1B0410000000000000001 /* PhonoscopeStreamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0410000000000000001 /* PhonoscopeStreamView.swift */; };
+		01A1B0400000000000000001 /* PhonoscopeStreamClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0400000000000000001 /* PhonoscopeStreamClient.swift */; };
 		01A1B0350000000000000001 /* PhonoscopeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0350000000000000001 /* PhonoscopeStore.swift */; };
 		01A1B0360000000000000001 /* PhonoscopeSimulation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0360000000000000001 /* PhonoscopeSimulation.swift */; };
 		01A1B0370000000000000001 /* MetalPhonoscopeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0370000000000000001 /* MetalPhonoscopeView.swift */; };
@@ -42,6 +44,7 @@
 		01A1B0120000000000000001 /* Rajdhani-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 01A1A0120000000000000001 /* Rajdhani-Bold.ttf */; };
 		01A1B0130000000000000001 /* ShareTechMono-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 01A1A0130000000000000001 /* ShareTechMono-Regular.ttf */; };
 		01A1B0140000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 01A1A0140000000000000001 /* Assets.xcassets */; };
+		01A1B0500000000000000001 /* NovaSRT in Frameworks */ = {isa = PBXBuildFile; productRef = 01A1F0500000000000000001 /* NovaSRT */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -70,6 +73,8 @@
 		01A1A0320000000000000001 /* ParitySelfTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParitySelfTests.swift; sourceTree = "<group>"; };
 		01A1A0330000000000000001 /* PhonoscopeModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonoscopeModels.swift; sourceTree = "<group>"; };
 		01A1A0340000000000000001 /* PhonoscopeExpression.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonoscopeExpression.swift; sourceTree = "<group>"; };
+		01A1A0410000000000000001 /* PhonoscopeStreamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonoscopeStreamView.swift; sourceTree = "<group>"; };
+		01A1A0400000000000000001 /* PhonoscopeStreamClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonoscopeStreamClient.swift; sourceTree = "<group>"; };
 		01A1A0350000000000000001 /* PhonoscopeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonoscopeStore.swift; sourceTree = "<group>"; };
 		01A1A0360000000000000001 /* PhonoscopeSimulation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonoscopeSimulation.swift; sourceTree = "<group>"; };
 		01A1A0370000000000000001 /* MetalPhonoscopeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalPhonoscopeView.swift; sourceTree = "<group>"; };
@@ -89,6 +94,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				01A1B0500000000000000001 /* NovaSRT in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -123,6 +129,8 @@
 				01A1A0320000000000000001 /* ParitySelfTests.swift */,
 				01A1A0330000000000000001 /* PhonoscopeModels.swift */,
 				01A1A0340000000000000001 /* PhonoscopeExpression.swift */,
+				01A1A0410000000000000001 /* PhonoscopeStreamView.swift */,
+				01A1A0400000000000000001 /* PhonoscopeStreamClient.swift */,
 				01A1A0350000000000000001 /* PhonoscopeStore.swift */,
 				01A1A0360000000000000001 /* PhonoscopeSimulation.swift */,
 				01A1A0370000000000000001 /* MetalPhonoscopeView.swift */,
@@ -178,6 +186,9 @@
 			dependencies = (
 			);
 			name = NovaAppleTVDashboard;
+			packageProductDependencies = (
+				01A1F0500000000000000001 /* NovaSRT */,
+			);
 			productName = NovaAppleTVDashboard;
 			productReference = 01A1C0010000000000000001 /* NovaAppleTVDashboard.app */;
 			productType = "com.apple.product-type.application";
@@ -206,6 +217,9 @@
 				Base,
 			);
 			mainGroup = 01A1E0010000000000000001;
+			packageReferences = (
+				01A1F0510000000000000001 /* XCLocalSwiftPackageReference "Packages/NovaSRT" */,
+			);
 			productRefGroup = 01A1E0030000000000000001 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -249,6 +263,8 @@
 				01A1B0320000000000000001 /* ParitySelfTests.swift in Sources */,
 				01A1B0330000000000000001 /* PhonoscopeModels.swift in Sources */,
 				01A1B0340000000000000001 /* PhonoscopeExpression.swift in Sources */,
+				01A1B0410000000000000001 /* PhonoscopeStreamView.swift in Sources */,
+				01A1B0400000000000000001 /* PhonoscopeStreamClient.swift in Sources */,
 				01A1B0350000000000000001 /* PhonoscopeStore.swift in Sources */,
 				01A1B0360000000000000001 /* PhonoscopeSimulation.swift in Sources */,
 				01A1B0370000000000000001 /* MetalPhonoscopeView.swift in Sources */,
@@ -274,6 +290,7 @@
 		01A1F0050000000000000001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				"EXCLUDED_ARCHS[sdk=appletvsimulator*]" = x86_64;
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
@@ -335,6 +352,7 @@
 		01A1F0060000000000000001 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				"EXCLUDED_ARCHS[sdk=appletvsimulator*]" = x86_64;
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
@@ -390,6 +408,7 @@
 		01A1F0070000000000000001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				"EXCLUDED_ARCHS[sdk=appletvsimulator*]" = x86_64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "Apple Development";
@@ -415,6 +434,7 @@
 		01A1F0080000000000000001 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				"EXCLUDED_ARCHS[sdk=appletvsimulator*]" = x86_64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "Apple Development";
@@ -459,6 +479,21 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		01A1F0510000000000000001 /* XCLocalSwiftPackageReference "Packages/NovaSRT" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/NovaSRT;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		01A1F0500000000000000001 /* NovaSRT */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 01A1F0510000000000000001 /* XCLocalSwiftPackageReference "Packages/NovaSRT" */;
+			productName = NovaSRT;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 01A1F0020000000000000001 /* Project object */;
 }
