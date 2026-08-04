@@ -41,11 +41,16 @@ struct TVDashboardView: View {
     @State private var resistOffset: CGFloat = 0
     @State private var resistToken = 0
     @State private var exitCommandSerial = 0
-    @State private var isPhonoscopePresented = false
+    // Device verification can launch straight into the streamed surface without
+    // changing normal startup or adding a production-only navigation path.
+    @State private var isPhonoscopePresented =
+        ProcessInfo.processInfo.arguments.contains("--launch-phonoscope")
+        || ProcessInfo.processInfo.environment["NOVA_LAUNCH_PHONOSCOPE"] == "1"
 
     var body: some View {
         ZStack {
-            Group {
+            if !isPhonoscopePresented {
+                Group {
                 FluidBackgroundView(theme: store.theme, baseURL: store.activeBaseURL ?? AppConfig.dashboardBaseURL)
                     .ignoresSafeArea()
 
@@ -125,7 +130,8 @@ struct TVDashboardView: View {
                 }
                 }
             }
-            .opacity(isPhonoscopePresented ? 0 : 1)
+                .transition(.opacity)
+            }
 
             if isPhonoscopePresented {
                 PhonoscopeView(onBack: dismissPhonoscope)
@@ -173,18 +179,26 @@ struct TVDashboardView: View {
         }
         .onChange(of: phonoscope.visualizerTheme) { _, visualizerTheme in
             guard phonoscope.housePartyEnabled else { return }
+            // Already eased upstream by `PhonoscopeStore.advanceTheme`, so this
+            // tracks it directly rather than filtering it a second time.
             store.setVisualizerColorOverride(visualizerTheme)
         }
         .onChange(of: store.followVisualizerWhenActive) { _, followsVisualizer in
             if followsVisualizer, phonoscope.housePartyEnabled {
-                store.setVisualizerColorOverride(phonoscope.visualizerTheme)
+                store.setVisualizerColorOverride(
+                    phonoscope.visualizerTheme,
+                    duration: phonoscopeTransitionSeconds
+                )
             } else if !followsVisualizer {
                 store.clearVisualizerColorOverride(duration: phonoscopeTransitionSeconds)
             }
         }
         .onChange(of: phonoscope.housePartyEnabled) { _, housePartyEnabled in
             if housePartyEnabled {
-                store.setVisualizerColorOverride(phonoscope.visualizerTheme)
+                store.setVisualizerColorOverride(
+                    phonoscope.visualizerTheme,
+                    duration: phonoscopeTransitionSeconds
+                )
             } else {
                 store.clearVisualizerColorOverride(duration: phonoscopeTransitionSeconds)
             }

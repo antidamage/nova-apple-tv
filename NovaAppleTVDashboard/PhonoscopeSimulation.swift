@@ -2,6 +2,12 @@ import Foundation
 import QuartzCore
 import simd
 
+/// Stable per-module seed shared with the GPU renderer's `moduleSeed`.
+/// Deterministic across processes, unlike `String.hashValue`.
+func phonoscopeModuleSeed(_ moduleID: String) -> UInt64 {
+    moduleID.utf8.reduce(1_469_598_103_934_665_603) { ($0 ^ UInt64($1)) &* 1_099_511_628_211 }
+}
+
 private func phonoscopePaletteSlots(in expression: String) -> [String] {
     let parts = expression.components(
         separatedBy: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_")).inverted
@@ -380,7 +386,11 @@ final class PhonoscopeSimulation {
         lastBeatIndex = Int.min
         guard let module else { return }
         let maximum = min(module.resources.maxInteractiveFieldEntities, 16_384)
-        var seed = signal.trackSeed ^ UInt64(bitPattern: Int64(module.id.hashValue))
+        // Explicit FNV-1a, not `String.hashValue`. Swift salts string hashing
+        // per process, so the old seed differed between launches and could never
+        // agree with the GPU renderer on iridium, which implements this same
+        // module spec. See nova-visualiser/tests/conformance.
+        var seed = signal.trackSeed ^ phonoscopeModuleSeed(module.id)
         func random() -> Float {
             seed = seed &* 6_364_136_223_846_793_005 &+ 1
             return Float((seed >> 40) & 0x00ff_ffff) / Float(0x00ff_ffff)
