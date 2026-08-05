@@ -289,7 +289,7 @@ struct PhonoscopeGlowUniforms {
     float sigma;
     // 0-1.
     float opacity;
-    // 0 multiply, 1 screen.
+    // The `__glowBlend` axis itself: 0 screen, 1 multiply, 2 overlay.
     int blendMode;
 };
 
@@ -344,9 +344,17 @@ fragment float4 phonoscope_glow_overlay(
     float3 baseRgb = max(baseColor.rgb, float3(0.0));
     float amount = clamp(uniforms.opacity, 0.0, 1.0);
 
+    // Photoshop overlay: multiply where the base is dark, screen where it is
+    // light, with the base choosing which. `step` keeps that per channel.
+    float3 overlaid = mix(2.0 * baseRgb * glowColor,
+                          1.0 - 2.0 * (1.0 - baseRgb) * (1.0 - glowColor),
+                          step(0.5, baseRgb));
+
     float3 blended = uniforms.blendMode == 1
-        ? baseRgb + amount * (glowColor - baseRgb * glowColor)
-        : baseRgb * (1.0 - amount + glowColor * amount);
+        ? baseRgb * (1.0 - amount + glowColor * amount)
+        : uniforms.blendMode == 2
+            ? baseRgb + amount * (overlaid - baseRgb)
+            : baseRgb + amount * (glowColor - baseRgb * glowColor);
 
     // Coverage passes through untouched: this is a look on the picture, not a
     // layer of its own, and the letterboxed modules composite over a separate
