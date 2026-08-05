@@ -459,7 +459,7 @@ private extension View {
                 content()
                     .blur(radius: min(max(settings.blurAmount, 0), 20) * 1.2)
                     .opacity(min(max(settings.opacity, 0), 100) / 100)
-                    .blendMode(settings.screenBlend ? .screen : .multiply)
+                    .blendMode(settings.blendMode.swiftUI)
                     .allowsHitTesting(false)
             }
         } else {

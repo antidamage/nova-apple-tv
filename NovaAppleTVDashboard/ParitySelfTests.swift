@@ -145,9 +145,9 @@ enum ParitySelfTests {
     /// Two things in that pass can drift independently and neither is visible
     /// as a failure — a softness mismatch and a blend mismatch both just look
     /// like "the television is a bit different". So all of it is locked: the
-    /// blur's sigma mapping and tap weights, the two blend modes, and the
-    /// midpoint at which the driven blend-mode parameter cuts between them
-    /// (`nova::kGlowBlendMultiplyThreshold` in `src/core/effect_scale.h`).
+    /// blur's sigma mapping and tap weights, the three blend modes, and the
+    /// points at which the driven blend-mode parameter snaps between them
+    /// (`nova::glowBlendModeFor` in `src/core/effect_scale.h`).
     ///
     /// Evaluates the same grid as `runGlowOverlayCase()` in
     /// `nova-visualiser/src/tools/conformance.cpp` and must produce the same
@@ -163,7 +163,7 @@ enum ParitySelfTests {
             base: SIMD4<Float>,
             glow: SIMD4<Float>,
             opacity: Float,
-            screenBlend: Bool
+            mode: PhonoscopeGlowBlendMode
         ) -> SIMD4<Float> {
             let amount = min(max(opacity, 0), 1)
             // Blend modes are defined on display-referred colour, so the glow
@@ -172,9 +172,17 @@ enum ParitySelfTests {
             func blend(_ base: Float, _ glow: Float) -> Float {
                 let g = min(max(glow, 0), 1)
                 let b = max(base, 0)
-                return screenBlend
-                    ? b + (g - b * g) * amount
-                    : b * (1 - amount + g * amount)
+                switch mode {
+                case .multiply:
+                    return b * (1 - amount + g * amount)
+                case .overlay:
+                    // Photoshop overlay: multiply where the base is dark and
+                    // screen where it is light, with the base choosing which.
+                    let overlaid = b < 0.5 ? 2 * b * g : 1 - 2 * (1 - b) * (1 - g)
+                    return b + amount * (overlaid - b)
+                case .screen:
+                    return b + amount * (g - b * g)
+                }
             }
             // Coverage is deliberately untouched.
             return SIMD4<Float>(
@@ -214,7 +222,9 @@ enum ParitySelfTests {
         let bases: [Float] = [0, 0.35, 1, 3]
         let glows: [Float] = [0, 0.4, 1, 2.5]
         let opacities: [Float] = [0, 0.5, 1]
-        for screenBlend in [false, true] {
+        // Ordered as `runGlowOverlayCase()` orders them: the two original modes
+        // first, overlay appended.
+        for mode in [PhonoscopeGlowBlendMode.multiply, .screen, .overlay] {
             for base in bases {
                 for glow in glows {
                     for opacity in opacities {
@@ -222,7 +232,7 @@ enum ParitySelfTests {
                             base: SIMD4<Float>(base, base * 0.6, base * 0.25, 0.75),
                             glow: SIMD4<Float>(glow, glow * 0.5, glow * 0.9, 0.4),
                             opacity: opacity,
-                            screenBlend: screenBlend
+                            mode: mode
                         )
                         mix(out.x)
                         mix(out.y)
@@ -234,17 +244,17 @@ enum ParitySelfTests {
             }
         }
 
-        // Where the driven blend mode stops being screen and becomes multiply.
-        // Both engines are handed a continuous number by the driver, so the cut
-        // point — including the values either side of it — has to agree.
-        for blend in [0.0, 0.25, 0.4999, 0.5, 0.75, 1.0] {
-            mix(blend < PhonoscopeGlowOverlaySettings.multiplyBlendThreshold ? 0 : 1)
+        // Which mode each driven value snaps to. Both engines are handed a
+        // continuous number by the driver, so every cut point — including the
+        // values either side of it — has to agree.
+        for blend in [0.0, 0.25, 0.4999, 0.5, 0.75, 1.0, 1.4999, 1.5, 2.0] {
+            mix(Float(PhonoscopeGlowBlendMode(driven: blend).rawValue))
             samples += 1
         }
 
         let produced = String(format: "glow-overlay:%d:%016llx", samples, hash)
         assert(
-            produced == "glow-overlay:121:5a4cdccf8296cbd8",
+            produced == "glow-overlay:172:8d76e7af06c50a11",
             "glow-overlay parity drifted from nova-visualiser: \(produced)"
         )
     }

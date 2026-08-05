@@ -38,21 +38,45 @@ private struct PhonoscopeGlowUniforms {
     var blendMode: Int32 = 1
 }
 
+/// Photoshop's blend modes for the glow layer, numbered as the `__glowBlend`
+/// driver axis numbers them. Mirrors `nova::GlowBlendMode` in
+/// `src/core/effect_scale.h`; the raw values are the shaders' `blendMode`
+/// uniform, so modes are only ever appended.
+enum PhonoscopeGlowBlendMode: Int, Equatable {
+    case screen = 0
+    case multiply = 1
+    case overlay = 2
+
+    /// Mirrors `nova::glowBlendModeFor`. Drivers produce a continuous number,
+    /// so it snaps to the nearest whole mode — deliberately a cut and not a
+    /// cross-fade, so a swap on the beat reads as a switch.
+    init(driven value: Double) {
+        let clamped = min(max(value, 0), Double(PhonoscopeGlowBlendMode.modeCount - 1))
+        self = PhonoscopeGlowBlendMode(rawValue: Int(floor(clamped + 0.5))) ?? .screen
+    }
+
+    static let modeCount = 3
+
+    /// SwiftUI ships all three as compositing modes, which is what the layers
+    /// living above the Metal view on the local fallback path use.
+    var swiftUI: BlendMode {
+        switch self {
+        case .screen: return .screen
+        case .multiply: return .multiply
+        case .overlay: return .overlay
+        }
+    }
+}
+
 /// The final glow overlay's parameters, as the dashboard authors them.
 ///
 /// Blur amount, opacity and blend mode are all fully driven Phonoscope
 /// parameters, so these arrive already resolved for the current frame — the
-/// blend mode as the boolean its 0-1 driver axis resolved to.
+/// blend mode as the discrete mode its driver axis snapped to.
 struct PhonoscopeGlowOverlaySettings: Equatable {
-    /// Mirrors `nova::kGlowBlendMultiplyThreshold`. The blend-mode driver runs
-    /// 0-1 between the two modes and cuts hard here: below is screen, at or
-    /// above is multiply. Deliberately a cut and not a cross-fade, so a swap on
-    /// the beat reads as a switch.
-    static let multiplyBlendThreshold: Double = 0.5
-
     var blurAmount: Double = 0
     var opacity: Double = 0
-    var screenBlend: Bool = true
+    var blendMode: PhonoscopeGlowBlendMode = .screen
 
     /// Nothing to do when the layer is fully transparent, which is the default.
     /// Worth checking: the pass costs three fullscreen draws and two extra
@@ -472,7 +496,7 @@ final class MetalPhonoscopeRenderer: NSObject, MTKViewDelegate {
             )
             var blend = PhonoscopeGlowUniforms(
                 opacity: Float(min(max(overlay.opacity, 0), 100) / 100),
-                blendMode: overlay.screenBlend ? 1 : 0
+                blendMode: Int32(overlay.blendMode.rawValue)
             )
             encodeGlowPass(
                 commandBuffer: commandBuffer,

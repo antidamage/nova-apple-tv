@@ -983,13 +983,14 @@ final class PhonoscopeStore: ObservableObject {
             control: "slider", min: 0, max: 100, step: 0.1, default: 0,
             affects: nil, curve: nil, options: nil, section: nil, updateMode: "smooth"
         )
-        // Blend mode on a 0-1 axis: 0 screen, 1 multiply, cut at the midpoint.
-        // A step of 1 keeps the manual value and both driver endpoints on the
-        // two real modes; anything a driver produces in between is resolved by
-        // the threshold rather than cross-faded.
+        // Blend mode on a whole-numbered axis: 0 screen, 1 multiply, 2 overlay,
+        // snapped to the nearest. A step of 1 keeps the manual value and both
+        // driver endpoints on real modes; anything a driver produces in between
+        // is resolved by the snap rather than cross-faded.
         let glowBlendSetting = PhonoscopeModuleSetting(
             id: "glowBlend", label: "Glow blend mode", description: nil,
-            control: "select", min: 0, max: 1, step: 1, default: 0,
+            control: "select", min: 0, max: Double(PhonoscopeGlowBlendMode.modeCount - 1),
+            step: 1, default: 0,
             affects: nil, curve: nil, options: nil, section: nil, updateMode: "smooth"
         )
         let glowConfig = configuration?.glowOverlay
@@ -1006,14 +1007,14 @@ final class PhonoscopeStore: ObservableObject {
                 baseline: 0,
                 key: "visualiser:glowOpacity"
             ),
-            // Mirrors nova::glowBlendIsMultiply. An absent block resolves to 0
-            // and therefore to screen, matching the dashboard's default.
-            screenBlend: resolvedValue(
+            // Mirrors nova::glowBlendModeFor. An absent block resolves to 0 and
+            // therefore to screen, matching the dashboard's default.
+            blendMode: PhonoscopeGlowBlendMode(driven: resolvedValue(
                 source: glowConfig?.blendModeSource ?? manualZero,
                 setting: glowBlendSetting,
                 baseline: 0,
                 key: "visualiser:glowBlend"
-            ) < PhonoscopeGlowOverlaySettings.multiplyBlendThreshold
+            ))
         )
 
         guard let module else {
