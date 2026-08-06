@@ -289,6 +289,10 @@ struct PhonoscopeGlowUniforms {
     float sigma;
     // 0-1.
     float opacity;
+    // 1-10. Multiplies the glow's RGB.
+    float overdrive;
+    // 1 brings the overdriven glow back into 0-1; 0 lets it run to white.
+    int glowClamped;
     // The `__glowBlend` axis itself: 0 screen, 1 multiply, 2 overlay.
     int blendMode;
 };
@@ -340,7 +344,12 @@ fragment float4 phonoscope_glow_overlay(
     // Blend modes are defined on display-referred colour: an unclamped
     // highlight would saturate `screen` to white across the whole frame and
     // stop `multiply` from darkening anything.
-    float3 glowColor = clamp(glow.sample(linearSampler, in.uv).rgb, 0.0, 1.0);
+    // Overdrive multiplies the glow's RGB. Clamped, that saturates it;
+    // unclamped the excess carries into the blend and blows out to white.
+    float3 driven = max(glow.sample(linearSampler, in.uv).rgb
+                            * clamp(uniforms.overdrive, 1.0, 10.0),
+                        float3(0.0));
+    float3 glowColor = uniforms.glowClamped != 0 ? min(driven, float3(1.0)) : driven;
     float3 baseRgb = max(baseColor.rgb, float3(0.0));
     float amount = clamp(uniforms.opacity, 0.0, 1.0);
 

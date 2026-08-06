@@ -3,6 +3,33 @@ import QuartzCore
 import SwiftUI
 import UIKit
 
+/// The centred backdrop band and the vignette framing it.
+///
+/// This used to be a SwiftUI `.frame(height: geometry.size.height / 3)` with a
+/// `PhonoscopeEdgeVignette` overlay. Height, width, vignette opacity and
+/// vignette size are all driven parameters now, and a driven value changes
+/// every frame — re-running SwiftUI layout at 60 Hz is the wrong mechanism, so
+/// the band is resolved in the fragment shader instead. That is also what
+/// `nova-visualiser/src/shaders/fluid_background.frag` does, which retires a
+/// long-standing divergence between the two engines.
+struct FluidBackgroundBand: Equatable {
+    /// Whether this surface is banded at all. Separate from `heightFraction`
+    /// rather than inferred from it: a height driven to zero is a band closed
+    /// down to nothing, which fills the frame with vignette colour, and that is
+    /// a different picture from a surface that has no band in the first place.
+    var isEnabled: Bool
+    var heightFraction: Float
+    var widthFraction: Float
+    var vignetteColor: SIMD4<Float>
+    var vignetteOpacity: Float
+    var vignetteSize: Float
+
+    /// No band: the whole drawable is field, unclipped and unvignetted.
+    static let none = FluidBackgroundBand(
+        isEnabled: false, heightFraction: 1, widthFraction: 1,
+        vignetteColor: SIMD4<Float>(0, 0, 0, 1), vignetteOpacity: 0.96, vignetteSize: 1)
+}
+
 struct FluidBackgroundView: UIViewRepresentable {
     let theme: DashboardTheme
     var baseURL: URL = AppConfig.dashboardBaseURL
@@ -11,6 +38,9 @@ struct FluidBackgroundView: UIViewRepresentable {
     var allowsDisplacementTexture: Bool = true
     var animationSpeed: Float = 1
     var renderScale: CGFloat = 1
+    /// Band geometry and vignette, for the Phonoscope surface. Defaults to no
+    /// band at all, which is what the dashboard background wants.
+    var band: FluidBackgroundBand = .none
 
     func makeCoordinator() -> FluidBackgroundCoordinator {
         FluidBackgroundCoordinator()
@@ -31,6 +61,7 @@ struct FluidBackgroundView: UIViewRepresentable {
         renderer.blobSoftness = blobSoftness
         renderer.allowsDisplacementTexture = allowsDisplacementTexture
         renderer.animationSpeed = animationSpeed
+        renderer.band = band
         let view = FluidBackgroundMTKView(frame: .zero, device: device)
         view.renderScale = renderScale
         view.backgroundColor = UIColor(theme.background.color)
@@ -54,6 +85,7 @@ struct FluidBackgroundView: UIViewRepresentable {
         context.coordinator.renderer?.blobSoftness = blobSoftness
         context.coordinator.renderer?.allowsDisplacementTexture = allowsDisplacementTexture
         context.coordinator.renderer?.animationSpeed = animationSpeed
+        context.coordinator.renderer?.band = band
         if let view = uiView as? MTKView {
             view.backgroundColor = UIColor(theme.background.color)
             view.clearColor = theme.clearColor
@@ -137,6 +169,18 @@ struct FluidBackgroundUniforms {
     var hasMosaicTexture: Float
     var blobScale: Float
     var blobSoftness: Float
+    // Band geometry. Field order and the float4 placement must match
+    // FluidBackgroundUniforms in FluidBackgroundShader.metal exactly: the
+    // float4 lands on a 16-byte boundary only because the two Floats above it
+    // do, which is why there is a trailing pad at all.
+    var bandFraction: Float = 1
+    var bandWidthFraction: Float = 1
+    var vignetteColor: SIMD4<Float> = SIMD4<Float>(0, 0, 0, 1)
+    var vignetteOpacity: Float = 0.96
+    var vignetteSize: Float = 1
+    /// 1 when this surface is banded. A height of zero is a band closed to
+    /// nothing, not the absence of one, so the flag cannot be inferred.
+    var bandEnabled: Float = 0
     var padding: Float = 0
 }
 
@@ -163,6 +207,7 @@ final class FluidBackgroundRenderer: NSObject, MTKViewDelegate {
     var blobSoftness: Float = 1
     var allowsDisplacementTexture = true
     var animationSpeed: Float = 1
+    var band: FluidBackgroundBand = .none
 
     private var mosaicTexture: MTLTexture?
     private var loadedTextureKey: String?
@@ -220,9 +265,18 @@ final class FluidBackgroundRenderer: NSObject, MTKViewDelegate {
         let scale = Float(view.contentScaleFactor > 0 ? view.contentScaleFactor : 1)
         let uiScaleMultiplier = Self.targetDPR / scale
 
+        // The band's own pixel size, not the drawable's. That is what sets the
+        // blob field's aspect and the grain frequency, and it is what the view
+        // used to be physically sized to before the band moved into the shader.
+        // Using the full drawable here would stretch the field sideways the
+        // moment the band stopped being full-height.
+        let bandPixels = SIMD2(
+            Float(view.drawableSize.width) * (band.isEnabled ? max(band.widthFraction, 0.0001) : 1),
+            Float(view.drawableSize.height) * (band.isEnabled ? max(band.heightFraction, 0.0001) : 1)
+        )
         var uniforms = FluidBackgroundUniforms(
             time: Float(phase),
-            resolution: SIMD2(Float(view.drawableSize.width), Float(view.drawableSize.height)),
+            resolution: bandPixels,
             background: theme.background.vector,
             accent: theme.accent.vector,
             highlight: theme.highlight.vector,
@@ -235,7 +289,13 @@ final class FluidBackgroundRenderer: NSObject, MTKViewDelegate {
             uiScaleMultiplier: uiScaleMultiplier,
             hasMosaicTexture: mosaicTexture == nil ? 0 : 1,
             blobScale: blobScale,
-            blobSoftness: blobSoftness
+            blobSoftness: blobSoftness,
+            bandFraction: band.heightFraction,
+            bandWidthFraction: band.widthFraction,
+            vignetteColor: band.vignetteColor,
+            vignetteOpacity: band.vignetteOpacity,
+            vignetteSize: band.vignetteSize,
+            bandEnabled: band.isEnabled ? 1 : 0
         )
 
         encoder.setRenderPipelineState(pipelineState)

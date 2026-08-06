@@ -22,10 +22,38 @@ struct FluidBackgroundUniforms {
     float hasMosaicTexture;
     float blobScale;
     float blobSoftness;
+    // Band geometry, as fractions of the drawable. The Phonoscope surface used
+    // to get these as a SwiftUI `.frame(height: geometry.size.height / 3)` with
+    // a `PhonoscopeEdgeVignette` overlay; both are driven parameters now, and a
+    // driven value changes every frame, so a SwiftUI frame is the wrong
+    // mechanism. The view is full-screen and the band is resolved here instead,
+    // which is also what nova-visualiser's fluid_background.frag does.
+    //
+    // `bandEnabled == 0` means no band at all: the whole drawable is field,
+    // with no clip and no vignette. That is the dashboard background's use of
+    // this same shader, and it is the default. It is a separate flag rather
+    // than `bandFraction <= 0`, because a height driven to zero is a band
+    // closed down to nothing -- a frame of solid vignette colour, which is a
+    // different picture from having no band.
+    float bandFraction;
+    float bandWidthFraction;
+    float4 vignetteColor;
+    float vignetteOpacity;
+    float vignetteSize;
+    float bandEnabled;
     float padding;
 };
 
 constexpr sampler mosaicSampler(address::clamp_to_edge, filter::linear);
+
+// One SwiftUI LinearGradient stop pair, as coverage. Each of the four vignette
+// gradients runs from `opacity` at the edge to fully clear over `extent` of the
+// band, scaled by `size`. Mirrors `edge()` in
+// nova-visualiser/src/shaders/fluid_background.frag and
+// `backgroundBandEdge()` in core/background_band_reference.h.
+static float bandEdge(float t, float extent, float opacity, float size) {
+    return opacity * clamp(1.0 - t / max(0.0001, extent * size), 0.0, 1.0);
+}
 
 vertex VertexOut fluidBackgroundVertex(uint vertexID [[vertex_id]]) {
     float2 positions[3] = {
@@ -128,6 +156,42 @@ fragment float4 fluidBackgroundFragment(VertexOut in [[stage_in]],
     float uiScaleMultiplier = max(uniforms.uiScaleMultiplier, 0.0001);
     float2 uv = mosaicMappedUv(in.uv, aspect, mosaicTexture, uniforms.hasMosaicTexture, textureScale, uiScaleMultiplier);
     float backgroundOverlay = mosaicBackgroundOverlay(in.uv, aspect, mosaicTexture, uniforms.hasMosaicTexture, textureScale, uiScaleMultiplier);
+
+    // Band geometry. Not banded is the dashboard background's case: no clip,
+    // no vignette, and `uv` is left exactly as it was.
+    bool banded = uniforms.bandEnabled > 0.5;
+    float heightFraction = clamp(uniforms.bandFraction, 0.0, 1.0);
+    float widthFraction = clamp(uniforms.bandWidthFraction, 0.0, 1.0);
+    float vignetteOpacity = clamp(uniforms.vignetteOpacity, 0.0, 1.0);
+    float vignetteSize = max(uniforms.vignetteSize, 0.0);
+    float3 vignetteColor = uniforms.vignetteColor.rgb;
+
+    float inBand = 1.0;
+    float bandLocalX = uv.x;
+    float bandLocalY = uv.y;
+    if (banded) {
+        // The band is centred on both axes.
+        float bandTop = 0.5 - heightFraction * 0.5;
+        float bandLeft = 0.5 - widthFraction * 0.5;
+        bandLocalY = (uv.y - bandTop) / max(0.0001, heightFraction);
+        bandLocalX = (uv.x - bandLeft) / max(0.0001, widthFraction);
+
+        // Softened by about a pixel of the band's own size: at 4K a hard cut
+        // here shimmers under the encoder, and the streamed engine softens it
+        // identically.
+        float2 softness = 1.0 / max(resolution, float2(1.0, 1.0));
+        inBand = smoothstep(-softness.y, softness.y, bandLocalY)
+            * smoothstep(-softness.y, softness.y, 1.0 - bandLocalY)
+            * smoothstep(-softness.x, softness.x, bandLocalX)
+            * smoothstep(-softness.x, softness.x, 1.0 - bandLocalX);
+        if (inBand <= 0.0) {
+            // Outside the band is the vignette colour at full coverage, not a
+            // hole: the bars and the gradient inside the band are one surface.
+            return float4(saturate(vignetteColor), 1.0);
+        }
+        uv = clamp(float2(bandLocalX, bandLocalY), 0.0, 1.0);
+    }
+
     float2 p = (uv - 0.5) * float2(aspect, 1.0);
     float time = uniforms.time;
     float peakIntensity = clamp(uniforms.peakIntensity, 0.4, 2.6);
@@ -168,6 +232,25 @@ fragment float4 fluidBackgroundFragment(VertexOut in [[stage_in]],
     float3 cap = max(uniforms.accent.rgb, uniforms.highlight.rgb) * (0.64 + peakIntensity * 0.12) + uniforms.background.rgb * 1.05;
     color = min(color, cap);
     color = mix(color, uniforms.background.rgb, backgroundOverlay);
+
+    if (banded) {
+        // PhonoscopeEdgeVignette, formerly four SwiftUI LinearGradients in a
+        // ZStack. They composite source-over, so they combine as
+        // 1 - prod(1 - a), not as a sum. The authored extents (0.18 across,
+        // 0.28 down) keep their ratio under `vignetteSize`.
+        color = saturate(color);
+        float left = bandEdge(uv.x, 0.18, vignetteOpacity, vignetteSize);
+        float right = bandEdge(1.0 - uv.x, 0.18, vignetteOpacity, vignetteSize);
+        float top = bandEdge(uv.y, 0.28, vignetteOpacity, vignetteSize);
+        float bottom = bandEdge(1.0 - uv.y, 0.28, vignetteOpacity, vignetteSize);
+        float shade = 1.0 - (1.0 - left) * (1.0 - right) * (1.0 - top) * (1.0 - bottom);
+        // Toward the vignette colour rather than a plain darken, so the
+        // gradient meets the bars outside the band seamlessly. With the default
+        // black slot this is exactly the original `color *= (1 - shade)`.
+        color = mix(color, vignetteColor, shade);
+        // The one-pixel clip edge fades the shaded band into the frame.
+        color = mix(vignetteColor, color, inBand);
+    }
 
     return float4(saturate(color), 1.0);
 }

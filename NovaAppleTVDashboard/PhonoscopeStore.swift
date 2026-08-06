@@ -16,8 +16,46 @@ final class PhonoscopeStore: ObservableObject {
     @Published private(set) var resolvedModuleSettings: [String: Double] = [:]
     @Published private(set) var driverInterpolatedSettingIDs: Set<String> = []
     @Published private(set) var messageScale = 1.0
+    /// The centre image's base height, as a fraction of the frame.
+    @Published private(set) var centreImageHeight = PhonoscopeCentreImage.defaultHeightPercent / 100
+    /// Centre-image library id to fetchable URL, from the config envelope.
+    private var centreImageUrls: [String: String] = [:]
+
+    /// What the centre of the frame holds. Only the local Metal fallback draws
+    /// this: on the streamed path it is already baked into the picture.
+    enum CentreSlot: Equatable {
+        case nothing
+        case message(String)
+        case image(URL)
+    }
+
+    /// The centre slot, resolved in the same order as `Simulation::submit` in
+    /// nova-visualiser:
+    ///
+    ///  1. a non-blank message draws text and no image;
+    ///  2. otherwise the live colour theme's image, if it supplies one;
+    ///  3. otherwise nothing.
+    ///
+    /// Emptying the message is "stop overriding", not "show nothing". The two
+    /// engines must agree on this or the fallback shows something different
+    /// from the stream it replaces.
+    var centreSlot: CentreSlot {
+        guard let configuration else { return .nothing }
+        let message = configuration.message?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !message.isEmpty { return .message(message) }
+
+        guard let imageId = activeColorTheme?.imageId,
+              let path = centreImageUrls[imageId],
+              let url = URL(string: path, relativeTo: AppConfig.dashboardBaseURL)
+        else { return .nothing }
+        return .image(url)
+    }
     /// Final glow overlay, already resolved for this frame.
     @Published private(set) var glowOverlay = PhonoscopeGlowOverlaySettings()
+    /// Frame geometry, vignette and scene blend, resolved through the same
+    /// lanes as everything else. Defaults reproduce the original letterbox.
+    @Published private(set) var pictureFrame = PhonoscopePictureFrame()
     @Published private(set) var housePartyEnabled = false
     @Published private(set) var themeSwitchingPaused = false
     @Published private(set) var themeInterpolationPaused = false
@@ -35,9 +73,12 @@ final class PhonoscopeStore: ObservableObject {
     private var lastPollDate = Date()
     private var lastLyricIndex = -1
     private var etag: String?
-    private var themeLibrary: [PhonoscopeThemeLibraryEntry] = []
-    private var currentThemeEntry: PhonoscopeThemeGroupEntry?
+    /// The playlist entry that is live. Rotation walks entries, not themes:
+    /// one theme can appear several times with different settings groups.
+    private var currentColorEntryID: String?
     private var currentColorThemeID: String?
+    /// The settings groups Nova says the live entry is running.
+    private var selectedSettingsGroupIds: [String] = []
     private var themeTarget: DashboardTheme?
     private var lastThemeAdvance = Date()
     private var lastWholeThemeChange = Date()
@@ -47,6 +88,10 @@ final class PhonoscopeStore: ObservableObject {
     private var variantBlendTarget = 0.0
     private var variantTransitionStart = Date()
     private var currentThemeVariant: String?
+    /// The cross-fade Nova published with its current selection. Authored on the
+    /// `__themeChange` binding's release, so different entries can fade at
+    /// different speeds.
+    private var themeStateTransitionSeconds: Double?
     private var currentThemeBroadcastTransitionSeconds = 0.0
     private var housePartySessionID: String?
     private var housePartySequence = 0
@@ -68,15 +113,9 @@ final class PhonoscopeStore: ObservableObject {
     private var themeSelectionTransitionForward = true
     private var authoritativeThemeRevision = -1
     private var hasAuthoritativeThemeState = false
-    private struct ParameterDriverState {
-        var current: Double
-        var target: Double
-        var eventKey: String
-        var lastUpdated: Date
-        var holdUntil: Date
-        var wasAttacking: Bool
-    }
-    private var parameterDriverStates: [String: ParameterDriverState] = [:]
+    /// Per driver-slot envelope state, owned here and threaded through the
+    /// shared evaluator in PhonoscopeDrivers.swift.
+    private var parameterDriverStates: [String: PhonoscopeDriverSlotState] = [:]
 
     func enter(fallbackTheme: DashboardTheme) {
         guard pollTask == nil else { return }
@@ -121,7 +160,6 @@ final class PhonoscopeStore: ObservableObject {
         configurationTask = nil
         themeTask = nil
         housePartyTask = nil
-        currentThemeEntry = nil
         currentColorThemeID = nil
         activeColorTheme = nil
         resolvedModuleSettings = [:]
@@ -288,7 +326,6 @@ final class PhonoscopeStore: ObservableObject {
             Int(backgroundAverage.green.rounded()),
             Int(backgroundAverage.blue.rounded()),
         ]
-        let legacyGroup = activeThemeGroup
         let colorGroup = activeColorGroup
         let palette = activeColorTheme.map { theme in
             Dictionary(uniqueKeysWithValues: theme.colors.map { key, value in
@@ -306,10 +343,10 @@ final class PhonoscopeStore: ObservableObject {
             peakBrightnessPct: smoothedHousePartyLocalBrightness,
             cloudPeakBrightnessPct: smoothedHousePartyCloudBrightness,
             transitionSeconds: lightTransitionSeconds,
-            hueMode: colorGroup?.housePartyHueMode ?? legacyGroup?.housePartyHueMode ?? "follow",
-            brightnessMode: colorGroup?.housePartyBrightnessMode ?? legacyGroup?.housePartyBrightnessMode ?? "follow",
+            hueMode: "follow",
+            brightnessMode: "follow",
             ambient: !signal.playing,
-            themeId: currentThemeEntry?.themeId,
+            themeId: nil,
             themeVariant: currentThemeVariant,
             themeTransitionSeconds: currentThemeBroadcastTransitionSeconds,
             colorThemeId: currentColorThemeID,
@@ -446,21 +483,21 @@ final class PhonoscopeStore: ObservableObject {
             if http.statusCode == 304 { return }
             guard 200..<300 ~= http.statusCode else { throw URLError(.badServerResponse) }
             let envelope = try decoder.decode(PhonoscopeConfigurationEnvelope.self, from: data)
-            let previousGroup = activeThemeGroup
+            let previousGroup = activeColorGroup?.id
             let previousColorGroup = activeColorGroup
-            let previousPreviewThemeID = configuration?.editorPreviewColorThemeId
+            let previousPreviewEntryID = configuration?.editorPreviewColorEntryId
             let changed = configuration?.activeModuleId != envelope.config.activeModuleId
                 || configuration?.activeModuleVersion != envelope.config.activeModuleVersion
             configuration = envelope.config
-            themeLibrary = envelope.themeLibrary?.entries ?? []
+            centreImageUrls = envelope.centreImageUrls ?? [:]
             etag = http.value(forHTTPHeaderField: "ETag")
             if changed || module == nil {
                 await loadModule(id: envelope.config.activeModuleId, version: envelope.config.activeModuleVersion)
             }
-            if (currentThemeEntry == nil && currentColorThemeID == nil)
-                || previousGroup != activeThemeGroup
+            if currentColorEntryID == nil
+                || previousGroup != activeColorGroup?.id
                 || previousColorGroup != activeColorGroup
-                || previousPreviewThemeID != configuration?.editorPreviewColorThemeId {
+                || previousPreviewEntryID != configuration?.editorPreviewColorEntryId {
                 selectNextTheme(force: true)
             }
             refreshResolvedSettings()
@@ -510,14 +547,22 @@ final class PhonoscopeStore: ObservableObject {
         themeSwitchingPaused = state.paused
         guard state.revision != authoritativeThemeRevision else { return }
         authoritativeThemeRevision = state.revision
-        guard let group = activeColorGroup,
-              group.id == state.groupId,
-              let selected = group.themes.first(where: { $0.id == state.themeId })
+        guard let group = activeColorGroup, group.id == state.groupId else { return }
+        let entry = group.entries.first(where: { $0.id == state.entryId })
+        // Resolve the published theme id rather than the entry's own. They are
+        // the same during normal rotation, but a solo holds the picture on a
+        // theme that need not appear in this group's playlist at all.
+        guard let selected = colorTheme(id: state.themeId)
+            ?? entry.flatMap({ colorTheme(id: $0.themeId) })
         else { return }
 
-        currentThemeEntry = nil
         currentThemeVariant = nil
+        currentColorEntryID = entry?.id
         currentColorThemeID = selected.id
+        // Behaviour arrives with the colour, so a theme that shares a palette
+        // with the previous entry still swaps its drivers.
+        selectedSettingsGroupIds = state.settingsGroupIds ?? entry?.settingsGroupIds ?? []
+        themeStateTransitionSeconds = state.transitionSeconds
         activeColorTheme = selected
         parameterDriverStates = [:]
         let target = dashboardTheme(for: selected)
@@ -592,7 +637,7 @@ final class PhonoscopeStore: ObservableObject {
             lastLyricIndex = -1
             status = "RESOLVING \(nextIdentity.title.uppercased())"
             Task { [weak self] in await self?.resolveTrack(nextIdentity) }
-            selectNextTheme(force: activeColorGroup?.changeMode == "song" || activeThemeGroup?.changeMode == "song")
+            selectNextTheme(force: true)
         } else if nextIdentity == nil {
             clockDiscontinuity = lastTrackIdentity != nil
             lastTrackIdentity = nil
@@ -632,35 +677,22 @@ final class PhonoscopeStore: ObservableObject {
         }
     }
 
-    private var activeThemeGroup: PhonoscopeThemeGroup? {
-        guard let configuration,
-              let id = configuration.moduleThemeGroupIds?[configuration.activeModuleId]
-        else { return nil }
-        return configuration.themeGroups?.first { $0.id == id }
+    /// The live playlist entry, resolved against Nova's selection.
+    var activeColorGroupEntry: PhonoscopeColorGroupEntry? {
+        guard let group = activeColorGroup else { return nil }
+        if let id = currentColorEntryID, let entry = group.entries.first(where: { $0.id == id }) {
+            return entry
+        }
+        return group.entries.first
     }
 
+    /// The cross-fade between playlist entries. Nova publishes the authored
+    /// value with its selection; genre routing and rotation timing are both its
+    /// business now, not this client's.
     var settingTransitionSeconds: Double {
         if let themeTransitionDurationOverride { return themeTransitionDurationOverride }
-        if configuration?.editorPreviewColorThemeId?.isEmpty == false { return 0.05 }
-        if let group = activeColorGroup { return group.transitionSeconds }
-        return activeThemeGroup?.transitionSeconds ?? Double(configuration?.transitionMs ?? 600) / 1_000
-    }
-
-    private func matchingEntries(_ group: PhonoscopeThemeGroup) -> [PhonoscopeThemeGroupEntry] {
-        guard group.useGenres else { return group.themes }
-        let songGenres = Set((track?.genreNames ?? []).map(normalizedGenre))
-        guard !songGenres.isEmpty else { return group.themes }
-        let matches = group.themes.filter { entry in
-            entry.genres.contains { configured in
-                let wanted = normalizedGenre(configured)
-                return songGenres.contains { $0 == wanted || $0.contains(wanted) || wanted.contains($0) }
-            }
-        }
-        return matches.isEmpty ? group.themes : matches
-    }
-
-    private func normalizedGenre(_ value: String) -> String {
-        value.lowercased().filter(\.isLetter)
+        if configuration?.editorPreviewColorEntryId?.isEmpty == false { return 0.05 }
+        return themeStateTransitionSeconds ?? Double(configuration?.transitionMs ?? 600) / 1_000
     }
 
     private func selectManualTheme(forward: Bool) -> DashboardTheme? {
@@ -677,14 +709,16 @@ final class PhonoscopeStore: ObservableObject {
         }
 
         if let group = activeColorGroup {
-            let candidates = group.themes
+            let candidates = group.entries
             guard !candidates.isEmpty else { return nil }
-            let currentIndex = currentColorThemeID.flatMap { id in candidates.firstIndex { $0.id == id } }
+            let currentIndex = currentColorEntryID.flatMap { id in candidates.firstIndex { $0.id == id } }
             let nextIndex = destinationIndex(current: currentIndex, count: candidates.count)
-            let next = candidates[nextIndex]
-            currentThemeEntry = nil
+            let entry = candidates[nextIndex]
+            guard let next = colorTheme(id: entry.themeId) else { return nil }
             currentThemeVariant = nil
+            currentColorEntryID = entry.id
             currentColorThemeID = next.id
+            selectedSettingsGroupIds = entry.settingsGroupIds ?? []
             activeColorTheme = next
             lastWholeThemeChange = Date()
             lastWholeThemeBarIndex = signal.barIndex
@@ -696,108 +730,56 @@ final class PhonoscopeStore: ObservableObject {
             return dashboardTheme(for: next)
         }
 
-        guard let group = activeThemeGroup else { return nil }
-        let candidates = matchingEntries(group)
-        guard !candidates.isEmpty else { return nil }
-        let currentIndex = currentThemeEntry.flatMap { current in
-            candidates.firstIndex { $0.themeId == current.themeId }
-        }
-        let nextIndex = destinationIndex(current: currentIndex, count: candidates.count)
-        let next = candidates[nextIndex]
-        guard let saved = themeLibrary.first(where: { $0.id == next.themeId }),
-              let resolved = saved.themeSet.resolved(variant: next.baseVariant)
-        else { return nil }
-        currentThemeEntry = next
-        currentThemeVariant = next.baseVariant
-        lastWholeThemeChange = Date()
-        lastWholeThemeBarIndex = signal.barIndex
-        lastVariantBarIndex = signal.barIndex
-        variantBlendFrom = 0
-        variantBlendTarget = 0
-        variantTransitionStart = Date()
-        themeSelectionTransitionStarted = now
-        themeSelectionTransitionDuration = 1
-        themeSelectionTransitionForward = forward
-        return DashboardTheme(sharedTheme: resolved)
+        return nil
     }
 
     private func selectNextTheme(force: Bool) {
-        if let group = activeColorGroup {
-            let candidates = group.themes
-            guard !candidates.isEmpty else {
-                activeColorTheme = nil
-                currentColorThemeID = nil
-                visualizerTheme = nil
-                return
-            }
-            let next: PhonoscopeColorTheme
-            if let previewID = configuration?.editorPreviewColorThemeId, !previewID.isEmpty,
-               let preview = candidates.first(where: { $0.id == previewID }) {
-                next = preview
-            } else if group.order == "shuffle", candidates.count > 1 {
-                next = candidates.filter { $0.id != currentColorThemeID }.randomElement() ?? candidates[0]
-            } else if let currentColorThemeID,
-                      let index = candidates.firstIndex(where: { $0.id == currentColorThemeID }) {
-                next = candidates[(index + 1) % candidates.count]
-            } else {
-                next = candidates[0]
-            }
-            if !force, next.id == currentColorThemeID { return }
-            currentThemeEntry = nil
-            currentThemeVariant = nil
-            currentColorThemeID = next.id
-            activeColorTheme = next
-            currentThemeBroadcastTransitionSeconds = group.transitionSeconds
-            let target = dashboardTheme(for: next)
-            themeTarget = target
-            themeSelectionTransitionStarted = Date()
-            themeSelectionTransitionDuration = max(0, group.transitionSeconds)
-            themeSelectionTransitionForward = true
-            lastWholeThemeChange = Date()
-            lastWholeThemeBarIndex = signal.barIndex
-            parameterDriverStates = [:]
-            refreshResolvedSettings()
-            return
-        }
-        guard let group = activeThemeGroup else {
-            currentThemeEntry = nil
+        guard let group = activeColorGroup else {
             currentThemeVariant = nil
             visualizerTheme = nil
             return
         }
-        let candidates = matchingEntries(group)
+        let candidates = group.entries
         guard !candidates.isEmpty else {
-            currentThemeVariant = nil
+            activeColorTheme = nil
+            currentColorEntryID = nil
+            currentColorThemeID = nil
             visualizerTheme = nil
             return
         }
-        let next: PhonoscopeThemeGroupEntry
-        if group.order == "shuffle", candidates.count > 1 {
-            next = candidates.filter { $0.themeId != currentThemeEntry?.themeId }.randomElement() ?? candidates[0]
-        } else if let current = currentThemeEntry,
-                  let index = candidates.firstIndex(where: { $0.themeId == current.themeId }) {
-            next = candidates[(index + 1) % candidates.count]
+        let entry: PhonoscopeColorGroupEntry
+        if let previewID = configuration?.editorPreviewColorEntryId, !previewID.isEmpty,
+           let preview = candidates.first(where: { $0.id == previewID }) {
+            entry = preview
+        } else if let currentColorEntryID,
+                  let index = candidates.firstIndex(where: { $0.id == currentColorEntryID }) {
+            entry = candidates[(index + 1) % candidates.count]
         } else {
-            next = candidates[0]
+            entry = candidates[0]
         }
-        if !force, next.themeId == currentThemeEntry?.themeId { return }
-        currentThemeEntry = next
-        currentThemeVariant = next.baseVariant
-        currentThemeBroadcastTransitionSeconds = group.transitionSeconds
-        guard let saved = themeLibrary.first(where: { $0.id == next.themeId }),
-              let resolved = saved.themeSet.resolved(variant: next.baseVariant)
-        else { return }
-        let target = DashboardTheme(sharedTheme: resolved)
+        if !force, entry.id == currentColorEntryID { return }
+        guard let next = colorTheme(id: entry.themeId) else { return }
+        currentThemeVariant = nil
+        currentColorEntryID = entry.id
+        currentColorThemeID = next.id
+        selectedSettingsGroupIds = entry.settingsGroupIds ?? []
+        activeColorTheme = next
+        let transition = settingTransitionSeconds
+        currentThemeBroadcastTransitionSeconds = transition
+        let target = dashboardTheme(for: next)
         themeTarget = target
         themeSelectionTransitionStarted = Date()
-        themeSelectionTransitionDuration = max(0, group.transitionSeconds)
+        themeSelectionTransitionDuration = max(0, transition)
         themeSelectionTransitionForward = true
         lastWholeThemeChange = Date()
         lastWholeThemeBarIndex = signal.barIndex
-        lastVariantBarIndex = signal.barIndex
-        variantBlendFrom = 0
-        variantBlendTarget = 0
-        variantTransitionStart = Date()
+        parameterDriverStates = [:]
+        refreshResolvedSettings()
+    }
+
+    /// Looks a colour theme up in the flat library.
+    private func colorTheme(id: String) -> PhonoscopeColorTheme? {
+        configuration?.colorThemes?.first { $0.id == id }
     }
 
     private func advanceTheme() {
@@ -857,77 +839,17 @@ final class PhonoscopeStore: ObservableObject {
             let amount = phonoscopeChaseAmount(delta: delta, settlingDuration: duration)
             visualizerTheme = (visualizerTheme ?? target).mixed(with: target, amount: amount)
         }
-        if let group = activeColorGroup {
-            if configuration?.editorPreviewColorThemeId?.isEmpty == false {
-                if let target = themeTarget { chase(target, duration: 0.05) }
-                refreshResolvedSettings()
-                return
+        if activeColorGroup != nil {
+            let preview = configuration?.editorPreviewColorEntryId?.isEmpty == false
+            if let target = themeTarget {
+                chase(target, duration: preview ? 0.05 : max(0, settingTransitionSeconds))
             }
-            if group.changeMode == "interval",
-               Date().timeIntervalSince(lastWholeThemeChange) >= group.waitSeconds + group.transitionSeconds {
-                selectNextTheme(force: true)
-            } else if group.changeMode == "downbeat",
-                      signal.playing,
-                      signal.barIndex != lastWholeThemeBarIndex {
-                selectNextTheme(force: true)
-            }
-            if let target = themeTarget { chase(target, duration: max(0, group.transitionSeconds)) }
             refreshResolvedSettings()
             return
         }
-        guard let group = activeThemeGroup else { visualizerTheme = nil; return }
-        if group.changeMode == "interval",
-           Date().timeIntervalSince(lastWholeThemeChange) >= group.waitSeconds + group.transitionSeconds {
-            selectNextTheme(force: true)
-        } else if group.changeMode == "downbeat",
-                  signal.playing,
-                  signal.barIndex != lastWholeThemeBarIndex {
-            selectNextTheme(force: true)
-        }
-        guard var target = themeTarget else { return }
-        if currentThemeEntry?.swapOnDownbeat == true,
-           let entry = currentThemeEntry,
-           let saved = themeLibrary.first(where: { $0.id == entry.themeId }),
-           let opposite = saved.themeSet.resolved(variant: entry.baseVariant == "dark" ? "light" : "dark") {
-            let now = Date()
-            let currentDuration = variantBlendTarget == 1 ? 0.25 : 1.0
-            let currentElapsed = min(1, now.timeIntervalSince(variantTransitionStart) / currentDuration)
-            let currentEased = currentElapsed * currentElapsed * (3 - 2 * currentElapsed)
-            var variantBlend = variantBlendFrom + (variantBlendTarget - variantBlendFrom) * currentEased
-            if signal.playing, signal.barIndex != lastVariantBarIndex {
-                variantBlendFrom = variantBlend
-                variantBlendTarget = 1
-                variantTransitionStart = now
-                lastVariantBarIndex = signal.barIndex
-            } else if variantBlendTarget == 1, currentElapsed >= 1 {
-                variantBlendFrom = 1
-                variantBlendTarget = 0
-                variantTransitionStart = now
-                variantBlend = 1
-            } else {
-                let duration = variantBlendTarget == 1 ? 0.25 : 1.0
-                let elapsed = min(1, now.timeIntervalSince(variantTransitionStart) / duration)
-                let eased = elapsed * elapsed * (3 - 2 * elapsed)
-                variantBlend = variantBlendFrom + (variantBlendTarget - variantBlendFrom) * eased
-            }
-            target = target.mixed(with: DashboardTheme(sharedTheme: opposite), amount: variantBlend)
-            let nextVariant = variantBlend >= 0.5
-                ? (entry.baseVariant == "dark" ? "light" : "dark")
-                : entry.baseVariant
-            if nextVariant != currentThemeVariant {
-                currentThemeVariant = nextVariant
-                currentThemeBroadcastTransitionSeconds =
-                    nextVariant == entry.baseVariant ? 1.0 : 0.25
-            }
-        } else {
-            lastVariantBarIndex = signal.barIndex
-            variantBlendFrom = 0
-            variantBlendTarget = 0
-            currentThemeVariant = currentThemeEntry?.baseVariant
-            currentThemeBroadcastTransitionSeconds = group.transitionSeconds
-        }
-        chase(target, duration: max(0, currentThemeBroadcastTransitionSeconds))
+        visualizerTheme = themeTarget
     }
+
 
     private func dashboardTheme(for theme: PhonoscopeColorTheme) -> DashboardTheme {
         var target = housePartyFallbackTheme
@@ -948,230 +870,143 @@ final class PhonoscopeStore: ObservableObject {
         return target
     }
 
+    /// Resolves every driven value for this frame through the shared lane
+    /// evaluator in PhonoscopeDrivers.swift.
+    ///
+    /// Picture-level effects are declared here because no module manifest
+    /// declares them; the declarations mirror PHONOSCOPE_PICTURE_EFFECTS in the
+    /// dashboard and the private settings Engine.cpp synthesises. All three
+    /// must agree on every range.
     private func refreshResolvedSettings() {
-        let messageScaleSetting = PhonoscopeModuleSetting(
-            id: "messageScale", label: "Message scale", description: nil,
-            control: "slider", min: 0.1, max: 5, step: 0.1, default: 1,
-            affects: nil, curve: nil, options: nil, section: nil, updateMode: "smooth"
-        )
-        messageScale = resolvedValue(
-            source: configuration?.messageScaleSource ?? PhonoscopeParameterSource(
-                type: "manual", value: 1, min: nil, max: nil, cadence: nil,
-                intervalSeconds: nil, transitionSeconds: nil, attackSeconds: nil, holdSeconds: nil, releaseSeconds: nil
-            ),
-            setting: messageScaleSetting,
-            baseline: 1,
-            key: "visualiser:messageScale"
-        )
+        var declarations: [String: PhonoscopeEffectDeclaration] = [
+            PhonoscopeEffectID.messageScale: PhonoscopeEffectDeclaration(
+                id: PhonoscopeEffectID.messageScale, min: 0.1, max: 5, step: 0.1, defaultValue: 1),
+            PhonoscopeEffectID.glowBlur: PhonoscopeEffectDeclaration(
+                id: PhonoscopeEffectID.glowBlur, min: 0, max: 20, step: 0.1, defaultValue: 0),
+            PhonoscopeEffectID.glowOpacity: PhonoscopeEffectDeclaration(
+                id: PhonoscopeEffectID.glowOpacity, min: 0, max: 100, step: 1, defaultValue: 0),
+            // Multiplied into the blurred copy before it is clamped; 1 is the
+            // identity.
+            PhonoscopeEffectID.glowOverdrive: PhonoscopeEffectDeclaration(
+                id: PhonoscopeEffectID.glowOverdrive, min: 1, max: 10, step: 0.1, defaultValue: 1),
+            // 0/1: clamped by default, the display-referred behaviour.
+            PhonoscopeEffectID.glowClamp: PhonoscopeEffectDeclaration(
+                id: PhonoscopeEffectID.glowClamp, min: 0, max: 1, step: 1, defaultValue: 1),
+            // 0 screen, 1 multiply, 2 overlay, snapped to the nearest rather
+            // than cross-faded. A step of 1 keeps every authored endpoint on a
+            // real mode.
+            PhonoscopeEffectID.glowBlend: PhonoscopeEffectDeclaration(
+                id: PhonoscopeEffectID.glowBlend, min: 0,
+                max: Double(PhonoscopeGlowBlendMode.modeCount - 1), step: 1, defaultValue: 0),
+            // Frame geometry, as a PERCENTAGE of the render view. The defaults
+            // are the fixed letterbox these replaced: a centred band one third
+            // high and full width. Authored 0-100 because "33%" is what the
+            // control means; `makePictureFrame` divides by 100 once, so
+            // everything downstream stays in unit space.
+            // The centre image's base height, as a percentage of the frame. A
+            // separate axis from the scale above: this is how big the image is,
+            // that is a multiplier on top of it.
+            PhonoscopeEffectID.centreHeight: PhonoscopeEffectDeclaration(
+                id: PhonoscopeEffectID.centreHeight, min: 0, max: 100, step: 1,
+                defaultValue: PhonoscopeCentreImage.defaultHeightPercent),
+            PhonoscopeEffectID.backgroundHeight: PhonoscopeEffectDeclaration(
+                id: PhonoscopeEffectID.backgroundHeight, min: 0, max: 100, step: 1,
+                defaultValue: 33),
+            PhonoscopeEffectID.backgroundWidth: PhonoscopeEffectDeclaration(
+                id: PhonoscopeEffectID.backgroundWidth, min: 0, max: 100, step: 1,
+                defaultValue: 100),
+            // 96% and 1 are the authored PhonoscopeEdgeVignette exactly, so an
+            // undriven frame is the one that was always drawn. Size stays a
+            // plain multiplier rather than a percentage because it can go past
+            // 1 — that is how the vignette closes the band down to a slit.
+            PhonoscopeEffectID.vignetteOpacity: PhonoscopeEffectDeclaration(
+                id: PhonoscopeEffectID.vignetteOpacity, min: 0, max: 100, step: 1,
+                defaultValue: 96),
+            PhonoscopeEffectID.vignetteSize: PhonoscopeEffectDeclaration(
+                id: PhonoscopeEffectID.vignetteSize, min: 0, max: 3, step: 0.05,
+                defaultValue: 1),
+            // 0 linear, 1 screen, 2 overlay, 3 multiply. Linear is the original
+            // composite term and so the default.
+            PhonoscopeEffectID.sceneBlend: PhonoscopeEffectDeclaration(
+                id: PhonoscopeEffectID.sceneBlend, min: 0,
+                max: Double(PhonoscopeSceneBlendMode.modeCount - 1), step: 1, defaultValue: 0),
+        ]
 
-        // Glow overlay. Same private-setting path as the message scale: these
-        // belong to the picture rather than to any one module, so no module
-        // manifest declares them. Mirrors the `__glowBlur`/`__glowOpacity`/
-        // `__glowBlend` settings the streamed renderer resolves in Engine.cpp.
-        let manualZero = PhonoscopeParameterSource(
-            type: "manual", value: 0, min: nil, max: nil, cadence: nil,
-            intervalSeconds: nil, transitionSeconds: nil, attackSeconds: nil,
-            holdSeconds: nil, releaseSeconds: nil
-        )
-        let glowBlurSetting = PhonoscopeModuleSetting(
-            id: "glowBlur", label: "Glow blur", description: nil,
-            control: "slider", min: 0, max: 20, step: 0.1, default: 0,
-            affects: nil, curve: nil, options: nil, section: nil, updateMode: "smooth"
-        )
-        let glowOpacitySetting = PhonoscopeModuleSetting(
-            id: "glowOpacity", label: "Glow opacity", description: nil,
-            control: "slider", min: 0, max: 100, step: 0.1, default: 0,
-            affects: nil, curve: nil, options: nil, section: nil, updateMode: "smooth"
-        )
-        // Blend mode on a whole-numbered axis: 0 screen, 1 multiply, 2 overlay,
-        // snapped to the nearest. A step of 1 keeps the manual value and both
-        // driver endpoints on real modes; anything a driver produces in between
-        // is resolved by the snap rather than cross-faded.
-        let glowBlendSetting = PhonoscopeModuleSetting(
-            id: "glowBlend", label: "Glow blend mode", description: nil,
-            control: "select", min: 0, max: Double(PhonoscopeGlowBlendMode.modeCount - 1),
-            step: 1, default: 0,
-            affects: nil, curve: nil, options: nil, section: nil, updateMode: "smooth"
-        )
-        let glowConfig = configuration?.glowOverlay
+        var values: [String: Double] = [:]
+        if let module {
+            for setting in module.settings {
+                values[setting.id] = setting.default
+                guard setting.updateMode != "structural" else { continue }
+                declarations[setting.id] = PhonoscopeEffectDeclaration(
+                    id: setting.id, min: setting.min, max: setting.max, step: setting.step,
+                    defaultValue: setting.default)
+            }
+            if let configured = configuration?.moduleSettings[module.id] {
+                values.merge(configured) { _, configured in configured }
+            }
+        }
+        for (id, declaration) in declarations where values[id] == nil {
+            values[id] = declaration.defaultValue
+        }
+
+        // Which settings groups apply is Nova's answer, arriving with the
+        // selected entry. Their lanes stack and their scalars layer.
+        let library = configuration?.settingsGroups ?? []
+        var wanted = selectedSettingsGroupIds
+        if wanted.isEmpty, let entry = activeColorGroupEntry {
+            wanted = entry.settingsGroupIds ?? []
+        }
+        var chosen = wanted.compactMap { id in library.first { $0.id == id }?.group }
+        if chosen.isEmpty, let fallback = library.first(where: { $0.isDefault ?? false })?.group {
+            // Nothing named anything usable, so fall back to the group
+            // everything falls back to rather than dropping every driver.
+            chosen = [fallback]
+        }
+
+        let merged = mergePhonoscopeSettingsGroups(chosen)
+        for (id, value) in merged.staticSettings { values[id] = value }
+        let evaluation = evaluatePhonoscopeDriverLanes(
+            lanes: merged.lanes, combine: merged.combine, declarations: declarations,
+            frame: signal, states: &parameterDriverStates)
+        for (id, value) in evaluation.values { values[id] = value }
+
+        messageScale = values[PhonoscopeEffectID.messageScale] ?? 1
+        // The centre image's base height, as a fraction. Authored 0-100 and
+        // divided once here, mirroring Simulation::submit in nova-visualiser.
+        centreImageHeight = min(max(
+            values[PhonoscopeEffectID.centreHeight]
+                ?? PhonoscopeCentreImage.defaultHeightPercent, 0), 100) / 100
         glowOverlay = PhonoscopeGlowOverlaySettings(
-            blurAmount: resolvedValue(
-                source: glowConfig?.blurSource ?? manualZero,
-                setting: glowBlurSetting,
-                baseline: 0,
-                key: "visualiser:glowBlur"
-            ),
-            opacity: resolvedValue(
-                source: glowConfig?.opacitySource ?? manualZero,
-                setting: glowOpacitySetting,
-                baseline: 0,
-                key: "visualiser:glowOpacity"
-            ),
-            // Mirrors nova::glowBlendModeFor. An absent block resolves to 0 and
-            // therefore to screen, matching the dashboard's default.
-            blendMode: PhonoscopeGlowBlendMode(driven: resolvedValue(
-                source: glowConfig?.blendModeSource ?? manualZero,
-                setting: glowBlendSetting,
-                baseline: 0,
-                key: "visualiser:glowBlend"
-            ))
-        )
+            blurAmount: values[PhonoscopeEffectID.glowBlur] ?? 0,
+            opacity: values[PhonoscopeEffectID.glowOpacity] ?? 0,
+            overdrive: values[PhonoscopeEffectID.glowOverdrive] ?? 1,
+            clamped: (values[PhonoscopeEffectID.glowClamp] ?? 1) >= 0.5,
+            // Mirrors nova::glowBlendModeFor.
+            blendMode: PhonoscopeGlowBlendMode(driven: values[PhonoscopeEffectID.glowBlend] ?? 0))
+        // The first three are authored as percentages and held as fractions.
+        // The divide happens exactly here, mirroring Simulation::submit in
+        // nova-visualiser, so PhonoscopePictureFrame and everything reading it
+        // stays in unit space.
+        pictureFrame = PhonoscopePictureFrame(
+            backgroundHeight: (values[PhonoscopeEffectID.backgroundHeight] ?? 33) / 100,
+            backgroundWidth: (values[PhonoscopeEffectID.backgroundWidth] ?? 100) / 100,
+            vignetteOpacity: (values[PhonoscopeEffectID.vignetteOpacity] ?? 96) / 100,
+            vignetteSize: values[PhonoscopeEffectID.vignetteSize] ?? 1,
+            // Mirrors nova::sceneBlendModeFor.
+            sceneBlendMode: PhonoscopeSceneBlendMode(
+                driven: values[PhonoscopeEffectID.sceneBlend] ?? 0))
 
         guard let module else {
             resolvedModuleSettings = [:]
             driverInterpolatedSettingIDs = []
             return
         }
-        var values = Dictionary(uniqueKeysWithValues: module.settings.map { ($0.id, $0.default) })
-        var drivenSettingIDs: Set<String> = []
-        if let configured = configuration?.moduleSettings[module.id] {
-            values.merge(configured) { _, configured in configured }
+        resolvedModuleSettings = values.filter { key, _ in
+            module.settings.contains { $0.id == key }
         }
-        if let sources = configuration?.moduleParameterSources?[module.id] {
-            for setting in module.settings {
-                guard let source = sources[setting.id], setting.updateMode != "structural" else { continue }
-                let baseline = values[setting.id] ?? setting.default
-                values[setting.id] = resolvedValue(
-                    source: source,
-                    setting: setting,
-                    baseline: baseline,
-                    key: "baseline:\(module.id):\(setting.id)"
-                )
-                if source.type != "manual" {
-                    drivenSettingIDs.insert(setting.id)
-                }
-            }
-        }
-        guard let theme = activeColorTheme,
-              let overrides = theme.parameterOverrides[module.id]
-        else {
-            resolvedModuleSettings = values
-            driverInterpolatedSettingIDs = drivenSettingIDs
-            return
-        }
-        for setting in module.settings {
-            guard let source = overrides[setting.id], setting.updateMode != "structural" else { continue }
-            let baseline = values[setting.id] ?? setting.default
-            values[setting.id] = resolvedValue(
-                source: source,
-                setting: setting,
-                baseline: baseline,
-                key: "\(theme.id):\(module.id):\(setting.id)"
-            )
-            if source.type == "manual" {
-                drivenSettingIDs.remove(setting.id)
-            } else {
-                drivenSettingIDs.insert(setting.id)
-            }
-        }
-        resolvedModuleSettings = values
-        driverInterpolatedSettingIDs = drivenSettingIDs
-    }
-
-    private func resolvedValue(
-        source: PhonoscopeParameterSource,
-        setting: PhonoscopeModuleSetting,
-        baseline: Double,
-        key: String
-    ) -> Double {
-        func bounded(_ value: Double) -> Double {
-            max(setting.min, min(setting.max, value))
-        }
-        func configured(_ value: Double) -> Double {
-            let bounded = bounded(value)
-            guard setting.step > 0 else { return bounded }
-            return max(setting.min, min(setting.max, setting.min + ((bounded - setting.min) / setting.step).rounded() * setting.step))
-        }
-        if source.type == "manual" { return configured(source.value ?? baseline) }
-        // Steps describe editable endpoint precision, not runtime animation
-        // precision. Driven outputs remain continuous between those endpoints.
-        let lower = configured(source.min ?? baseline)
-        let upper = max(lower, configured(source.max ?? baseline))
-        let now = Date()
-        var state = parameterDriverStates[key] ?? ParameterDriverState(
-            current: lower,
-            target: lower,
-            eventKey: "",
-            lastUpdated: now,
-            holdUntil: now,
-            wasAttacking: false
-        )
-        let delta = max(1.0 / 120.0, min(0.25, signal.delta))
-        if source.type == "random" {
-            let eventKey: String
-            switch source.cadence ?? "beat" {
-            case "downbeat", "bar": eventKey = "bar:\(signal.barIndex)"
-            case "song": eventKey = "song:\(track?.appleMusicId ?? track?.title ?? "ambient")"
-            case "interval":
-                let interval = max(0.25, source.intervalSeconds ?? 4)
-                eventKey = "interval:\(Int(floor(signal.time / interval)))"
-            default: eventKey = "beat:\(signal.beatIndex)"
-            }
-            if eventKey != state.eventKey {
-                state.eventKey = eventKey
-                let seed = stableSeed("\(key):\(eventKey)")
-                let fraction = Double(seed % 1_000_003) / 1_000_002
-                state.target = lower + (upper - lower) * fraction
-            }
-            let duration = max(0, source.transitionSeconds ?? 0.5)
-            let amount = duration == 0 ? 1 : min(1, delta / duration)
-            state.current += (state.target - state.current) * amount
-        } else {
-            let driver: Double
-            switch source.type {
-            case "beat": driver = signal.beatPulse
-            case "downbeat": driver = signal.downbeatPulse
-            case "energy": driver = signal.energy
-            case "bass": driver = Double(signal.spectrum.prefix(8).max() ?? 0)
-            case "mid": driver = Double(signal.spectrum.dropFirst(8).prefix(12).max() ?? 0)
-            case "treble": driver = Double(signal.spectrum.dropFirst(20).max() ?? 0)
-            default: driver = 0
-            }
-            state.target = lower + (upper - lower) * max(0, min(1, driver))
-            let signalEventKey: String
-            switch source.type {
-            case "downbeat": signalEventKey = "bar:\(signal.barIndex)"
-            default: signalEventKey = "beat:\(signal.beatIndex)"
-            }
-            let newSignalEvent = signalEventKey != state.eventKey
-            if newSignalEvent {
-                // A fresh beat/bass observation supersedes an older envelope,
-                // including a hold or release already in progress.
-                state.eventKey = signalEventKey
-                state.holdUntil = now
-            }
-            let attacking = state.target >= state.current
-            if attacking {
-                state.wasAttacking = true
-            } else if state.wasAttacking && !newSignalEvent {
-                state.holdUntil = now.addingTimeInterval(max(0, source.holdSeconds ?? 0))
-                state.wasAttacking = false
-            }
-            let holding = !attacking && now < state.holdUntil
-            let seconds = attacking
-                ? max(0, source.attackSeconds ?? 0.05)
-                : max(0, source.releaseSeconds ?? 0.6)
-            if holding {
-                // Preserve the attained level until the configured hold phase
-                // ends; the release ramp begins from this exact value.
-            } else if seconds == 0 {
-                state.current = state.target
-            } else {
-                // Attack and release are full-range ramp durations, not hold or
-                // exponential settling times. Partial target changes therefore
-                // consume the corresponding fraction of the configured time.
-                let fullRange = max(Double.ulpOfOne, upper - lower)
-                let step = fullRange * delta / seconds
-                if state.target >= state.current {
-                    state.current = min(state.target, state.current + step)
-                } else {
-                    state.current = max(state.target, state.current - step)
-                }
-            }
-        }
-        state.lastUpdated = now
-        parameterDriverStates[key] = state
-        return bounded(state.current)
+        driverInterpolatedSettingIDs = Set(evaluation.driven.filter { id in
+            module.settings.contains { $0.id == id }
+        })
     }
 
     private func resolveTrack(_ identity: PhonoscopeTrackIdentity) async {
@@ -1315,6 +1150,7 @@ final class PhonoscopeStore: ObservableObject {
             beatIndex: beatIndex,
             barPhase: barPhase,
             barIndex: barIndex,
+            timeSignature: timeSignature,
             downbeatPulse: downbeatPulse,
             energy: energy,
             valence: valence,
