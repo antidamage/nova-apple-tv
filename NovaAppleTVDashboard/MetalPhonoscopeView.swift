@@ -35,6 +35,8 @@ private struct PhonoscopeGlowUniforms {
     var axisTexel: SIMD2<Float> = .zero
     var sigma: Float = 0
     var opacity: Float = 0
+    var overdrive: Float = 1
+    var glowClamped: Int32 = 1
     var blendMode: Int32 = 1
 }
 
@@ -68,14 +70,78 @@ enum PhonoscopeGlowBlendMode: Int, Equatable {
     }
 }
 
+/// How the scene layer meets the backdrop. Mirrors `nova::SceneBlendMode` in
+/// `core/effect_scale.h`, and sits on its own driven axis (`__sceneBlend`)
+/// separate from the glow's — so the numbering is free rather than inherited,
+/// but still append-only, because a stored driver range is a pair of numbers
+/// on it.
+///
+/// `linear` is the original composite term and therefore the default, so an
+/// undriven picture is composited exactly as it always was.
+enum PhonoscopeSceneBlendMode: Int, Equatable {
+    case linear = 0
+    case screen = 1
+    case overlay = 2
+    case multiply = 3
+
+    /// Mirrors `nova::sceneBlendModeFor`.
+    init(driven value: Double) {
+        let clamped = min(max(value, 0), Double(PhonoscopeSceneBlendMode.modeCount - 1))
+        self = PhonoscopeSceneBlendMode(rawValue: Int(floor(clamped + 0.5))) ?? .linear
+    }
+
+    static let modeCount = 4
+
+    /// Where the two layers actually meet on this engine.
+    ///
+    /// The streamed renderer has the backdrop as a texture inside its composite
+    /// pass, so it blends there (`sceneBlendMode` in composite.frag). This
+    /// engine draws the backdrop as a separate view *behind* the Metal view and
+    /// leaves the Metal view transparent where uncovered, so the two layers only
+    /// ever meet in the compositor — which means the blend has to be a
+    /// `BlendMode` on the layer rather than arithmetic in the shader.
+    ///
+    /// The result is close but not bit-identical to the streamed engine, which
+    /// blends in linear HDR before the tonemap while SwiftUI blends the
+    /// display-referred result. `core/composite_reference.h` and
+    /// `ParitySelfTests.testSceneBlendParity()` lock the formula both sides
+    /// intend; this is how far the fallback path can carry it.
+    var swiftUI: BlendMode {
+        switch self {
+        case .linear: return .normal
+        case .screen: return .screen
+        case .overlay: return .overlay
+        case .multiply: return .multiply
+        }
+    }
+}
+
 /// The final glow overlay's parameters, as the dashboard authors them.
 ///
 /// Blur amount, opacity and blend mode are all fully driven Phonoscope
 /// parameters, so these arrive already resolved for the current frame — the
 /// blend mode as the discrete mode its driver axis snapped to.
+/// Frame geometry, the vignette framing it, and how the scene layer meets the
+/// backdrop. All five are driven parameters; the defaults are the fixed
+/// one-third letterbox and the authored `PhonoscopeEdgeVignette` they replaced,
+/// so an undriven picture is the one that was always drawn.
+///
+/// Mirrors the `__bgHeight` / `__bgWidth` / `__vignetteOpacity` /
+/// `__vignetteSize` / `__sceneBlend` block in nova-visualiser's
+/// `Engine::applyControlLanes`.
+struct PhonoscopePictureFrame: Equatable {
+    var backgroundHeight: Double = 1.0 / 3.0
+    var backgroundWidth: Double = 1
+    var vignetteOpacity: Double = 0.96
+    var vignetteSize: Double = 1
+    var sceneBlendMode: PhonoscopeSceneBlendMode = .linear
+}
+
 struct PhonoscopeGlowOverlaySettings: Equatable {
     var blurAmount: Double = 0
     var opacity: Double = 0
+    var overdrive: Double = 1
+    var clamped: Bool = true
     var blendMode: PhonoscopeGlowBlendMode = .screen
 
     /// Nothing to do when the layer is fully transparent, which is the default.
@@ -496,6 +562,8 @@ final class MetalPhonoscopeRenderer: NSObject, MTKViewDelegate {
             )
             var blend = PhonoscopeGlowUniforms(
                 opacity: Float(min(max(overlay.opacity, 0), 100) / 100),
+                overdrive: Float(min(max(overlay.overdrive, 1), 10)),
+                glowClamped: overlay.clamped ? 1 : 0,
                 blendMode: Int32(overlay.blendMode.rawValue)
             )
             encodeGlowPass(

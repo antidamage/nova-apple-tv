@@ -27,20 +27,23 @@ struct PhonoscopeView: View {
 
             if !usesStreamedRenderer {
                 if usesLetterboxedBackground {
-                    GeometryReader { geometry in
-                        FluidBackgroundView(
-                            theme: effectiveTheme,
-                            baseURL: dashboard.activeBaseURL ?? AppConfig.dashboardBaseURL,
-                            blobScale: 4,
-                            blobSoftness: 0.45,
-                            allowsDisplacementTexture: false,
-                            animationSpeed: Float(activeSettings["fluid_speed"] ?? 1),
-                            renderScale: 0.25
-                        )
-                        .overlay { PhonoscopeEdgeVignette() }
-                        .frame(width: geometry.size.width, height: geometry.size.height / 3)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                    }
+                    // Full-screen, with the band resolved in the fragment
+                    // shader rather than by a SwiftUI frame and a gradient
+                    // overlay. Height, width, vignette opacity and vignette
+                    // size are driven parameters now — they change every frame,
+                    // and re-running layout at 60 Hz to follow them is the
+                    // wrong mechanism. The streamed engine has always resolved
+                    // the band in-shader, so this also retires a divergence.
+                    FluidBackgroundView(
+                        theme: effectiveTheme,
+                        baseURL: dashboard.activeBaseURL ?? AppConfig.dashboardBaseURL,
+                        blobScale: 4,
+                        blobSoftness: 0.45,
+                        allowsDisplacementTexture: false,
+                        animationSpeed: Float(activeSettings["fluid_speed"] ?? 1),
+                        renderScale: 0.25,
+                        band: backdropBand
+                    )
                     .ignoresSafeArea()
                 }
 
@@ -59,6 +62,13 @@ struct PhonoscopeView: View {
                     measuredFramesPerSecond: $fallbackFramesPerSecond
                 )
                 .ignoresSafeArea()
+                // Where the scene layer meets the backdrop on this engine: the
+                // backdrop is the view behind, so the blend is a compositor
+                // blend rather than arithmetic inside the composite pass.
+                // Only meaningful when there IS a backdrop behind it.
+                .blendMode(usesLetterboxedBackground
+                    ? phonoscope.pictureFrame.sceneBlendMode.swiftUI
+                    : .normal)
             }
 
             if usesStreamedRenderer {
@@ -66,26 +76,37 @@ struct PhonoscopeView: View {
                     .ignoresSafeArea()
             }
 
-            // The message belongs to the picture, not to this client. The GPU
-            // renderer now rasterises it with FreeType using Rajdhani plus Apple
-            // Color Emoji, so it is identical on the television, the macOS
-            // viewer and the browser debug view. Drawing it locally as well
-            // would double it whenever the stream is up, so this overlay is
-            // only for the local Metal fallback path.
-            if !usesStreamedRenderer,
-               let message = phonoscope.configuration?.message?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !message.isEmpty {
+            // The centre slot belongs to the picture, not to this client. The
+            // GPU renderer rasterises the message with FreeType using Rajdhani
+            // plus Apple Color Emoji and decodes the image with libpng, so both
+            // are identical on the television, the macOS viewer and the browser
+            // debug view. Drawing either locally as well would double it
+            // whenever the stream is up, so this overlay is only for the local
+            // Metal fallback path.
+            //
+            // Which of the two is showing is `phonoscope.centreSlot`, resolved
+            // in the same order as `Simulation::submit` in nova-visualiser.
+            if !usesStreamedRenderer {
                 // The glow overlay is the last pass over the picture and the
-                // message is part of the picture, so it glows too. On the
+                // centre slot is part of the picture, so it glows too. On the
                 // streamed renderer that is literally one pass over the
-                // finished frame; here the message lives in SwiftUI above the
+                // finished frame; here the slot lives in SwiftUI above the
                 // Metal view, which cannot be sampled a second time, so the
-                // same blur/blend is applied to the text layer itself. Close,
-                // but not identical: a fallback approximation of an effect the
+                // same blur/blend is applied to the layer itself. Close, but
+                // not identical: a fallback approximation of an effect the
                 // streamed path does exactly.
-                messageLayer(message)
-                    .glowOverlay(phonoscope.glowOverlay) { messageLayer(message) }
-                    .allowsHitTesting(false)
+                switch phonoscope.centreSlot {
+                case .nothing:
+                    EmptyView()
+                case let .message(message):
+                    messageLayer(message)
+                        .glowOverlay(phonoscope.glowOverlay) { messageLayer(message) }
+                        .allowsHitTesting(false)
+                case let .image(url):
+                    imageLayer(url)
+                        .glowOverlay(phonoscope.glowOverlay) { imageLayer(url) }
+                        .allowsHitTesting(false)
+                }
             }
 
             if phonoscope.configuration?.statusOverlay != false {
@@ -236,6 +257,24 @@ struct PhonoscopeView: View {
         )
     }
 
+    /// The driven band geometry, handed to the fragment shader each frame.
+    ///
+    /// The vignette colour is the theme's `vignette` palette slot, falling back
+    /// to black — the colour the edge gradients were authored with — so a theme
+    /// from before that slot existed frames the band exactly as it always did.
+    private var backdropBand: FluidBackgroundBand {
+        let vignette = phonoscope.activeColorTheme?.colors["vignette"]?.vector
+            ?? SIMD4<Float>(0, 0, 0, 1)
+        return FluidBackgroundBand(
+            isEnabled: true,
+            heightFraction: Float(min(max(phonoscope.pictureFrame.backgroundHeight, 0), 1)),
+            widthFraction: Float(min(max(phonoscope.pictureFrame.backgroundWidth, 0), 1)),
+            vignetteColor: vignette,
+            vignetteOpacity: Float(min(max(phonoscope.pictureFrame.vignetteOpacity, 0), 1)),
+            vignetteSize: Float(max(phonoscope.pictureFrame.vignetteSize, 0))
+        )
+    }
+
     private var usesLetterboxedBackground: Bool {
         phonoscope.module?.settings.contains { setting in
             setting.affects?.contains("renderer.fluidBackground.speed") == true
@@ -373,6 +412,31 @@ struct PhonoscopeView: View {
         }
     }
 
+    /// The image half of the centre slot, on the local Metal fallback only.
+    ///
+    /// `.scaledToFit()` then `.scaleEffect()` is the SwiftUI spelling of the
+    /// contain-fit-then-scale that `centreImageHalfExtent()` states and
+    /// `centre_image.frag` implements — the same arithmetic, done by the
+    /// framework instead of by hand, with the base height folded into the scale
+    /// so a centre image reads as a centrepiece rather than a backdrop.
+    /// `ParitySelfTests.testCentreImageParity()` locks that the two engines
+    /// agree on what it means.
+    ///
+    /// The cross-fade between two colour themes' images is a SwiftUI transition
+    /// here rather than the streamed path's two-plane dissolve: an
+    /// approximation of the same effect, like the glow above it.
+    private func imageLayer(_ url: URL) -> some View {
+        AsyncImage(url: url) { image in
+            image.resizable().scaledToFit()
+        } placeholder: {
+            Color.clear
+        }
+        .scaleEffect(CGFloat(phonoscope.centreImageHeight) * phonoscope.messageScale)
+        .id(url)
+        .transition(.opacity)
+        .animation(.linear(duration: phonoscope.settingTransitionSeconds), value: url)
+    }
+
     private func messageLayer(_ message: String) -> some View {
         Text(message)
             .font(.custom("Rajdhani-Medium", size: 54))
@@ -474,46 +538,3 @@ private enum ThemeControl: Hashable {
     case next
 }
 
-private struct PhonoscopeEdgeVignette: View {
-    var body: some View {
-        ZStack {
-            LinearGradient(
-                stops: [
-                    .init(color: .black.opacity(0.96), location: 0),
-                    .init(color: .clear, location: 0.18),
-                    .init(color: .clear, location: 1),
-                ],
-                startPoint: .leading,
-                endPoint: .trailing
-            )
-            LinearGradient(
-                stops: [
-                    .init(color: .clear, location: 0),
-                    .init(color: .clear, location: 0.82),
-                    .init(color: .black.opacity(0.96), location: 1),
-                ],
-                startPoint: .leading,
-                endPoint: .trailing
-            )
-            LinearGradient(
-                stops: [
-                    .init(color: .black.opacity(0.96), location: 0),
-                    .init(color: .clear, location: 0.28),
-                    .init(color: .clear, location: 1),
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            LinearGradient(
-                stops: [
-                    .init(color: .clear, location: 0),
-                    .init(color: .clear, location: 0.72),
-                    .init(color: .black.opacity(0.96), location: 1),
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        }
-        .allowsHitTesting(false)
-    }
-}

@@ -105,6 +105,32 @@ private struct PhonoscopeFieldRange {
     let lineStartSlot: String
     let lineEndSlot: String
     let radialBeatWave: PhonoscopeFieldWaveSource?
+
+    // Extent gating. A field that declares `extentX`/`extentY` is allocated at
+    // its full 100% size and gated down to a centred sub-rectangle every tick,
+    // because extent is a driven parameter and a driven parameter must never
+    // trigger a structural rebuild. Fields declaring neither leave these at the
+    // allocated size, which is the same thing as no gating.
+    var gated = false
+    var extentX: PhonoscopeJSONValue?
+    var extentY: PhonoscopeJSONValue?
+    var liveColumns = 1
+    var liveRows = 1
+    // Index of the first live column/row. Always `(allocated - live) / 2`
+    // exactly: `live` is snapped to the allocated count's parity so the
+    // sub-rectangle is centred on a whole cell rather than sliding half a gap
+    // as the extent sweeps.
+    var columnBegin = 0
+    var rowBegin = 0
+
+    /// Whether an allocated cell is inside the live sub-rectangle. Dead cells
+    /// are not integrated, receive no effects and emit no particles, so the
+    /// running cost tracks the live extent even though allocation is worst-case.
+    func cellIsLive(_ x: Int, _ y: Int) -> Bool {
+        guard gated else { return true }
+        return x >= columnBegin && x < columnBegin + liveColumns
+            && y >= rowBegin && y < rowBegin + liveRows
+    }
 }
 
 private struct PhonoscopeFieldWaveSource {
@@ -206,6 +232,12 @@ final class PhonoscopeSimulation {
     private var moduleKey = ""
     private var entities: [PhonoscopeSimEntity] = []
     private var fields: [PhonoscopeFieldRange] = []
+    // Parallel to `entities`: true while the entity is inside its field's live
+    // extent. Recomputed by `applyFieldExtents` rather than derived per read,
+    // because integrate, effect propagation and publish all consult it per
+    // entity per tick. Entities outside any gated field — beat-emitted
+    // particles, every ungated module — are permanently true.
+    private var entityLive: [Bool] = []
     private var fieldWaves: [PhonoscopeFieldWave] = []
     private var visitedTokens: [UInt64] = []
     private var effectQueue: [PhonoscopeEffectDelivery] = []
@@ -321,6 +353,7 @@ final class PhonoscopeSimulation {
             let dt = Float(min(1.0 / 30.0, max(1.0 / 120.0, now - lastTick)))
             lastTick = now
             advanceConfiguration(delta: Double(dt))
+            applyFieldExtents()
             advanceSignal(by: Double(dt))
             var diagnostics = PhonoscopeDiagnostics()
 
@@ -332,10 +365,75 @@ final class PhonoscopeSimulation {
             advanceFieldWaves(dt: dt)
             processEffects(started: started, diagnostics: &diagnostics)
             integrate(dt: dt, module: module)
-            diagnostics.entityCount = entities.count
-            diagnostics.particleCount = min(module.resources.maxParticles, entities.count)
+            // Counted live rather than allocated: a gated field holds cells it
+            // is not drawing, and reporting those would make the overlay claim
+            // work the renderer is not doing.
+            let live = entityLive.isEmpty ? entities.count : entityLive.reduce(0) { $0 + ($1 ? 1 : 0) }
+            diagnostics.entityCount = live
+            diagnostics.particleCount = min(module.resources.maxParticles, live)
             publish(started: started, diagnostics: diagnostics)
         }
+    }
+
+    /// Resolves each gated field's live sub-rectangle from the current
+    /// settings. Runs every tick, before anything reads the field, because
+    /// extent is driven. Mirrors nova-visualiser Simulation::applyFieldExtents.
+    private func applyFieldExtents() {
+        guard fields.contains(where: \.gated) else { return }
+        let inputs = expressionInputs(random: 0.5)
+
+        // An allocated grid of N cells spans N-1 gaps across the module bounds,
+        // so an extent of `fraction` is that many gaps of it. Working in cells
+        // rather than world units keeps this exact at every complexity: the gap
+        // never has to be divided back out.
+        func liveCount(_ extent: PhonoscopeJSONValue?, allocated: Int) -> Int {
+            let raw = PhonoscopeExpression.evaluate(extent, inputs: inputs, fallback: 1)
+            let fraction = min(max(raw, 0), 1)
+            let desired = max(1, Int((fraction * Double(allocated - 1)).rounded()) + 1)
+            // Snap to the allocated count's parity. The live rectangle is
+            // centred, so an odd difference would sit it half a gap off centre
+            // — and a driver sweeping the extent would make the whole grid
+            // shimmer sideways as it grew.
+            let margin = max(0, (allocated - min(desired, allocated)) / 2)
+            return max(1, allocated - margin * 2)
+        }
+
+        entityLive = Array(repeating: true, count: entities.count)
+        for index in fields.indices where fields[index].gated {
+            var field = fields[index]
+            field.liveColumns = field.extentX == nil
+                ? field.columns
+                : liveCount(field.extentX, allocated: field.columns)
+            field.liveRows = field.extentY == nil
+                ? field.rows
+                : liveCount(field.extentY, allocated: field.rows)
+            field.columnBegin = (field.columns - field.liveColumns) / 2
+            field.rowBegin = (field.rows - field.liveRows) / 2
+            fields[index] = field
+
+            for entity in field.range where entity < entityLive.count {
+                let local = entity - field.range.lowerBound
+                let x = local % field.columns
+                let y = (local / field.columns) % field.rows
+                guard !field.cellIsLive(x, y) else { continue }
+                entityLive[entity] = false
+                // Park the dead cell rather than leaving it wherever the last
+                // live tick left it. It is not integrated while dead, so
+                // without this it would reappear mid-ripple when the extent
+                // grows back over it.
+                entities[entity].position = entities[entity].origin
+                entities[entity].velocity = .zero
+                entities[entity].energy = 0
+                entities[entity].waveEnergy = 0
+                entities[entity].waveTarget = 0
+                entities[entity].waveOffset = .zero
+            }
+        }
+    }
+
+    /// Entities beyond the array — beat-emitted particles — are always live.
+    private func isLive(_ index: Int) -> Bool {
+        index >= entityLive.count || entityLive[index]
     }
 
     private func advanceConfiguration(delta: Double) {
@@ -380,6 +478,7 @@ final class PhonoscopeSimulation {
     private func rebuild() {
         entities.removeAll(keepingCapacity: true)
         fields.removeAll(keepingCapacity: true)
+        entityLive.removeAll(keepingCapacity: true)
         fieldWaves.removeAll(keepingCapacity: true)
         effectQueue.removeAll(keepingCapacity: true)
         emitters.removeAll(keepingCapacity: true)
@@ -412,16 +511,13 @@ final class PhonoscopeSimulation {
             let density = Float(PhonoscopeExpression.evaluate(field["density"], inputs: inputs, fallback: 1))
             let normalizedDensity = max(0.05, min(1, density))
             let axisScale = module.is3D ? pow(normalizedDensity, 1.0 / 3.0) : sqrt(normalizedDensity)
-            let columns = layout == "grid" ? max(1, Int((Float(baseColumns) * axisScale).rounded())) : baseColumns
-            let rows = layout == "grid" ? max(1, Int((Float(baseRows) * axisScale).rounded())) : baseRows
+            // Counts at the *reference* extent — the footprint the module author
+            // declared as `resolution` x `spacing`. These set the gap; whether
+            // the grid is then allocated at that size or at the full bounds is
+            // decided below. Mirrors nova-visualiser Simulation::rebuild().
+            let referenceColumns = layout == "grid" ? max(1, Int((Float(baseColumns) * axisScale).rounded())) : baseColumns
+            let referenceRows = layout == "grid" ? max(1, Int((Float(baseRows) * axisScale).rounded())) : baseRows
             let depth = layout == "grid" ? max(1, Int((Float(baseDepth) * axisScale).rounded())) : baseDepth
-            let requestedCount = requested > 0 ? requested : baseColumns * baseRows * baseDepth
-            let scaledCount = layout == "grid"
-                ? columns * rows * depth
-                : Int((Float(requestedCount) * normalizedDensity).rounded())
-            let count = min(max(1, scaledCount), maximum - entities.count)
-            if count <= 0 { break }
-            let start = entities.count
             let declaredSpacing = field["spacing"]?.arrayValue?.compactMap(\.numberValue).map(Float.init) ?? []
             let usesDensity = field["density"] != nil
             func resolvedSpacing(_ declared: Float?, baseCount: Int, scaledCount: Int) -> Float? {
@@ -435,18 +531,50 @@ final class PhonoscopeSimulation {
             let spacingX = resolvedSpacing(
                 declaredSpacing.first,
                 baseCount: baseColumns,
-                scaledCount: columns
+                scaledCount: referenceColumns
             )
             let spacingY = resolvedSpacing(
                 declaredSpacing.dropFirst().first,
                 baseCount: baseRows,
-                scaledCount: rows
+                scaledCount: referenceRows
             )
             let spacingZ = resolvedSpacing(
                 declaredSpacing.dropFirst(2).first,
                 baseCount: baseDepth,
                 scaledCount: depth
             )
+
+            // A field that declares `extentX`/`extentY` sizes itself from the
+            // gap rather than the other way round: the gap is whatever
+            // complexity made it, and the grid is allocated to fill the module
+            // bounds at that gap. The live extent then gates a centred
+            // sub-rectangle every tick, so a driver can sweep it without a
+            // structural rebuild — extent cannot be a `structural` setting,
+            // because structural settings are excluded from driver lanes.
+            //
+            // Fields declaring neither keep the original sizing exactly, which
+            // is what holds every other module's conformance digest still.
+            let extentX = field["extentX"]
+            let extentY = field["extentY"]
+            let gated = layout == "grid" && (extentX != nil || extentY != nil)
+            func spanCount(_ span: Float, gap: Float?, fallback: Int) -> Int {
+                guard let gap, gap > 0, span > 0 else { return fallback }
+                return max(1, Int((span / gap).rounded()) + 1)
+            }
+            let columns = gated
+                ? spanCount(module.maximum.x - module.minimum.x, gap: spacingX, fallback: referenceColumns)
+                : referenceColumns
+            let rows = gated
+                ? spanCount(module.maximum.y - module.minimum.y, gap: spacingY, fallback: referenceRows)
+                : referenceRows
+
+            let requestedCount = requested > 0 ? requested : baseColumns * baseRows * baseDepth
+            let scaledCount = layout == "grid"
+                ? columns * rows * depth
+                : Int((Float(requestedCount) * normalizedDensity).rounded())
+            let count = min(max(1, scaledCount), maximum - entities.count)
+            if count <= 0 { break }
+            let start = entities.count
             let center = (module.minimum + module.maximum) * 0.5
             let fieldTemplate = field["template"]?.stringValue
                 .flatMap { module.templates[$0] }
@@ -512,7 +640,15 @@ final class PhonoscopeSimulation {
                 wireframe: field["wireframe"],
                 lineStartSlot: lineStartSlot,
                 lineEndSlot: lineEndSlot,
-                radialBeatWave: radialBeatWave(in: resolvedScene)
+                radialBeatWave: radialBeatWave(in: resolvedScene),
+                gated: gated,
+                extentX: extentX,
+                extentY: extentY,
+                // Full extent until the first `applyFieldExtents`, so a field is
+                // never momentarily empty between the rebuild and the tick that
+                // sizes it.
+                liveColumns: columns,
+                liveRows: rows
             ))
             if fields.last?.radialBeatWave != nil {
                 for index in start..<entities.count {
@@ -540,10 +676,13 @@ final class PhonoscopeSimulation {
                 wireframe: nil,
                 lineStartSlot: "primary",
                 lineEndSlot: "primary",
-                radialBeatWave: nil
+                radialBeatWave: nil,
+                liveColumns: entities.count,
+                liveRows: 1
             ))
         }
         visitedTokens = Array(repeating: 0, count: entities.count)
+        entityLive = Array(repeating: true, count: entities.count)
         effectQueue.reserveCapacity(8_192)
     }
 
@@ -831,10 +970,15 @@ final class PhonoscopeSimulation {
                 let attack = Float(PhonoscopeExpression.evaluate(source.attack, inputs: inputs, fallback: 0.04))
                 let release = Float(PhonoscopeExpression.evaluate(source.release, inputs: inputs, fallback: 0.55))
                 let flashPower = Float(PhonoscopeExpression.evaluate(source.flashPower, inputs: inputs, fallback: 4.5))
-                let centerPosition = field.range.reduce(SIMD3<Float>.zero) {
+                // Both of these are measured over the live cells only. A gated
+                // field is allocated at its full size, and taking the allocated
+                // corner here would size every ripple to a lattice most of
+                // which is not on screen.
+                let liveCells = field.range.filter { isLive($0) }
+                let centerPosition = liveCells.reduce(SIMD3<Float>.zero) {
                     $0 + entities[$1].origin
-                } / Float(max(1, field.range.count))
-                let maximumRadius = field.range.reduce(Float.zero) {
+                } / Float(max(1, liveCells.count))
+                let maximumRadius = liveCells.reduce(Float.zero) {
                     max($0, simd_distance(entities[$1].origin, centerPosition))
                 }
                 fieldWaves.append(PhonoscopeFieldWave(
@@ -872,7 +1016,7 @@ final class PhonoscopeSimulation {
                 guard fields.indices.contains(wave.fieldIndex) else { continue }
                 let field = fields[wave.fieldIndex]
                 let nextRadius = wave.radius + wave.speed * dt
-                for entityIndex in field.range {
+                for entityIndex in field.range where isLive(entityIndex) {
                     let radial = entities[entityIndex].origin - wave.center
                     let distance = simd_length(radial)
                     let distanceToFront = distance - nextRadius
@@ -975,6 +1119,10 @@ final class PhonoscopeSimulation {
         guard let field = fields.first(where: { $0.range.contains(index) }) else { return [] }
         let local = index - field.range.lowerBound
         if field.topology == "none" { return [] }
+        // A dead cell is not part of the lattice: it neither conducts an
+        // effect nor receives one, so a ripple stops at the live boundary
+        // instead of crossing the gap and re-emerging on the far side.
+        if field.gated, !isLive(index) { return [] }
         if field.topology == "nearest" || field.topology == "radius" || field.rows == 1 {
             let before = local > 0 ? index - 1 : field.range.upperBound - 1
             let after = local + 1 < field.range.count ? index + 1 : field.range.lowerBound
@@ -986,6 +1134,7 @@ final class PhonoscopeSimulation {
         var result: [Int] = []
         func append(_ nx: Int, _ ny: Int, _ nz: Int) {
             guard nx >= 0, nx < field.columns, ny >= 0, ny < field.rows, nz >= 0, nz < field.depth else { return }
+            guard field.cellIsLive(nx, ny) else { return }
             let neighbor = field.range.lowerBound + nz * field.columns * field.rows + ny * field.columns + nx
             if field.range.contains(neighbor) { result.append(neighbor) }
         }
@@ -1006,6 +1155,7 @@ final class PhonoscopeSimulation {
         let boundaryMode = module.boundary.mode
         let restitution = Float(module.boundary.restitution)
         for index in entities.indices {
+            guard isLive(index) else { continue }
             entities[index].age += dt
             if entities[index].lifetime > 0, entities[index].age >= entities[index].lifetime {
                 entities[index].age = 0
@@ -1079,7 +1229,13 @@ final class PhonoscopeSimulation {
                 palette.color(entity.paletteTrailEndSlot)
             )
         }
-        for entity in entities {
+        for entityIndex in entities.indices {
+            // Cells outside a gated field's live extent are not drawn at all.
+            // They are still allocated, which is what lets the extent be driven
+            // without a rebuild, but they contribute nothing to the picture or
+            // the draw count.
+            guard isLive(entityIndex) else { continue }
+            let entity = entities[entityIndex]
             let energy = min(1, max(0, entity.energy))
             let linearFlare = entity.flareThreshold < 1
                 ? max(0, min(1, (energy - entity.flareThreshold) / (1 - entity.flareThreshold)))
@@ -1131,6 +1287,11 @@ final class PhonoscopeSimulation {
             && PhonoscopeExpression.evaluate(field.wireframe, inputs: inputs, fallback: 0) >= 0.5 {
             guard field.columns > 0, field.rows > 0 else { continue }
             let layerSize = field.columns * field.rows
+            // Wires span the live sub-rectangle only, so the lattice ends
+            // cleanly at the boundary instead of trailing lines out into cells
+            // that are not drawn.
+            let columnEnd = field.columnBegin + field.liveColumns
+            let rowEnd = field.rowBegin + field.liveRows
             func appendLine(from start: Int, to end: Int) {
                 guard field.range.contains(start), field.range.contains(end) else { return }
                 let source = entities[start]
@@ -1150,11 +1311,11 @@ final class PhonoscopeSimulation {
                 ))
             }
             for z in 0..<field.depth {
-                for y in 0..<field.rows {
-                    for x in 0..<field.columns {
+                for y in field.rowBegin..<rowEnd {
+                    for x in field.columnBegin..<columnEnd {
                         let index = field.range.lowerBound + z * layerSize + y * field.columns + x
-                        if x + 1 < field.columns { appendLine(from: index, to: index + 1) }
-                        if y + 1 < field.rows { appendLine(from: index, to: index + field.columns) }
+                        if x + 1 < columnEnd { appendLine(from: index, to: index + 1) }
+                        if y + 1 < rowEnd { appendLine(from: index, to: index + field.columns) }
                     }
                 }
             }

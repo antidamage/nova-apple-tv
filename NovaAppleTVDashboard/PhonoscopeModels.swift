@@ -158,39 +158,28 @@ struct PhonoscopeProviderConfig: Decodable, Equatable {
     let lrclib: Bool
 }
 
-/// The final glow-overlay layer, laid over the whole picture — including the
-/// centre message — as the last thing that happens to a frame.
-///
-/// Blur amount (0-20), opacity (0-100) and blend mode are all driven Phonoscope
-/// parameters, so they arrive as sources rather than numbers. The blend mode's
-/// axis runs 0-1 between Photoshop's two modes — 0 screen, 1 multiply — and
-/// cuts hard at the midpoint, so a driver can swap it on the beat.
-struct PhonoscopeGlowOverlayConfig: Decodable, Equatable {
-    let blendModeSource: PhonoscopeParameterSource?
-    let blurSource: PhonoscopeParameterSource?
-    let opacitySource: PhonoscopeParameterSource?
-}
-
 struct PhonoscopeConfiguration: Decodable, Equatable {
     let activeModuleId: String
     let activeModuleVersion: String
     let idleBehavior: String
+    /// The centre of the picture when it is text. A non-blank message overrides
+    /// whatever image the live colour theme supplies.
     let message: String?
-    let messageScaleSource: PhonoscopeParameterSource?
-    let glowOverlay: PhonoscopeGlowOverlayConfig?
     let statusOverlay: Bool
     let transitionMs: Int
     let providers: PhonoscopeProviderConfig
     let moduleSettings: [String: [String: Double]]
-    let moduleParameterSources: [String: [String: PhonoscopeParameterSource]]?
     let pendingStructuralModuleSettings: [String: [String: Double]]
     let moduleReloadGenerations: [String: Int]
+    /// Named sets of driver lanes. Which of them apply is decided by the
+    /// selected playlist entry, so the whole library arrives here.
+    let settingsGroups: [PhonoscopeSettingsGroupConfig]?
+    /// The flat colour-only theme library, referenced by colour group entries.
+    let colorThemes: [PhonoscopeColorTheme]?
     let colorGroups: [PhonoscopeColorGroup]?
     let moduleColorGroupIds: [String: String]?
     let editorPreviewColorGroupId: String?
-    let editorPreviewColorThemeId: String?
-    let themeGroups: [PhonoscopeThemeGroup]?
-    let moduleThemeGroupIds: [String: String]?
+    let editorPreviewColorEntryId: String?
 }
 
 struct PhonoscopeColorValue: Decodable, Equatable {
@@ -218,57 +207,124 @@ struct PhonoscopeColorValue: Decodable, Equatable {
     }
 }
 
-struct PhonoscopeParameterSource: Decodable, Equatable {
+/// Wire shapes for the driver lanes. They decode into the evaluator's own
+/// types in PhonoscopeDrivers.swift; keeping the two separate means the
+/// evaluator stays free of Codable and can be compiled on its own for the
+/// standalone parity check.
+struct PhonoscopeDriverConfig: Decodable, Equatable {
     let type: String
-    let value: Double?
+    let every: Int?
+    let offset: Int?
+    let intervalSeconds: Double?
+    let cadence: String?
+    let transitionSeconds: Double?
+
+    var spec: PhonoscopeDriverSpec {
+        let cycle = Swift.max(1, Swift.min(16, every ?? 1))
+        return PhonoscopeDriverSpec(
+            type: type,
+            every: cycle,
+            offset: Swift.max(0, Swift.min(cycle - 1, offset ?? 0)),
+            intervalSeconds: intervalSeconds ?? 4,
+            cadence: cadence ?? "beat",
+            transitionSeconds: transitionSeconds ?? 0.5
+        )
+    }
+}
+
+struct PhonoscopeEffectBindingConfig: Decodable, Equatable {
+    let id: String
+    let effect: String
     let min: Double?
     let max: Double?
-    let cadence: String?
-    let intervalSeconds: Double?
-    let transitionSeconds: Double?
     let attackSeconds: Double?
     let holdSeconds: Double?
     let releaseSeconds: Double?
+    let params: [String: Double]?
+
+    var binding: PhonoscopeLaneBinding {
+        PhonoscopeLaneBinding(
+            id: id, effect: effect, min: min, max: max, attackSeconds: attackSeconds,
+            holdSeconds: holdSeconds, releaseSeconds: releaseSeconds, params: params ?? [:])
+    }
 }
 
+struct PhonoscopeDriverLaneConfig: Decodable, Equatable {
+    let id: String
+    let driver: PhonoscopeDriverConfig?
+    let modifiers: [PhonoscopeDriverConfig]?
+    let bindings: [PhonoscopeEffectBindingConfig]?
+
+    var lane: PhonoscopeLane {
+        PhonoscopeLane(
+            id: id,
+            driver: driver?.spec ?? PhonoscopeDriverSpec(type: "beat"),
+            modifiers: (modifiers ?? []).map { $0.spec },
+            bindings: (bindings ?? []).map { $0.binding })
+    }
+}
+
+struct PhonoscopeSettingsGroupConfig: Decodable, Equatable {
+    let id: String
+    let name: String?
+    let moduleId: String?
+    let lanes: [PhonoscopeDriverLaneConfig]?
+    let combine: [String: String]?
+    let staticSettings: [String: Double]?
+    let isDefault: Bool?
+
+    var group: PhonoscopeSettingsGroupSpec {
+        PhonoscopeSettingsGroupSpec(
+            id: id,
+            name: name ?? id,
+            moduleId: moduleId ?? "",
+            lanes: (lanes ?? []).map { $0.lane },
+            combine: (combine ?? [:]).mapValues { $0 == "strongest" ? .strongest : .add },
+            staticSettings: staticSettings ?? [:],
+            isDefault: isDefault ?? false)
+    }
+}
+
+/// The centre slot's image half.
+enum PhonoscopeCentreImage {
+    /// The default base height, as a percentage of the frame.
+    ///
+    /// A centre image is a centrepiece, not a backdrop: it sits in the middle of
+    /// the picture at a legible size rather than covering it, keeping the
+    /// source's proportions exactly. Mirrors
+    /// `kCentreImageDefaultHeightPercent` in
+    /// nova-visualiser/src/core/centre_image_reference.h; the two are locked
+    /// together by `ParitySelfTests.testCentreImageParity()`.
+    static let defaultHeightPercent: Double = 33
+}
+
+/// Colour, and the picture's centrepiece. Behaviour comes from whichever
+/// settings groups the playlist entry names alongside it.
 struct PhonoscopeColorTheme: Decodable, Equatable {
     let id: String
     let name: String
+    let moduleId: String?
     let colors: [String: PhonoscopeColorValue]
-    let parameterOverrides: [String: [String: PhonoscopeParameterSource]]
+    /// A centre-image library id this theme puts in the middle of the frame.
+    let imageId: String?
+}
+
+/// One stop on a colour group's rotation. A theme may appear in several
+/// entries with different settings groups, which is why an entry carries its
+/// own id: the theme id no longer addresses a position in the playlist.
+struct PhonoscopeColorGroupEntry: Decodable, Equatable {
+    let id: String
+    let themeId: String
+    let settingsGroupIds: [String]?
 }
 
 struct PhonoscopeColorGroup: Decodable, Equatable {
     let id: String
     let moduleId: String
     let name: String
-    let themes: [PhonoscopeColorTheme]
-    let order: String
-    let changeMode: String
-    let waitSeconds: Double
-    let transitionSeconds: Double
-    let housePartyHueMode: String
-    let housePartyBrightnessMode: String
-}
-
-struct PhonoscopeThemeGroupEntry: Decodable, Equatable {
-    let themeId: String
-    let baseVariant: String
-    let swapOnDownbeat: Bool
-    let genres: [String]
-}
-
-struct PhonoscopeThemeGroup: Decodable, Equatable {
-    let id: String
-    let name: String
-    let themes: [PhonoscopeThemeGroupEntry]
-    let useGenres: Bool
-    let order: String
-    let changeMode: String
-    let waitSeconds: Double
-    let transitionSeconds: Double
-    let housePartyHueMode: String
-    let housePartyBrightnessMode: String
+    let entries: [PhonoscopeColorGroupEntry]
+    let genres: [String]?
+    let isDefault: Bool?
 }
 
 struct HousePartySessionEnvelope: Decodable {
@@ -315,14 +371,24 @@ struct PhonoscopeConfigurationEnvelope: Decodable {
     let config: PhonoscopeConfiguration
     let modules: [PhonoscopeModuleSummary]
     let themeLibrary: PhonoscopeThemeLibrary?
+    /// Centre-image library id to fetchable URL. The configuration stores ids;
+    /// the dashboard resolves them here so no client has to know how its data
+    /// directory is laid out. Each URL carries a `?v=` so a re-upload is a new
+    /// cache key rather than a stale hit.
+    let centreImageUrls: [String: String]?
 }
 
 /// Nova-owned runtime colour-theme selection. The streamed and fallback
 /// renderers consume the same id so reconnecting cannot reset or fork state.
+/// Nova's authoritative rotation choice. The entry, its colour theme and its
+/// settings groups arrive together at one revision, so colour and behaviour can
+/// never tear apart on a client.
 struct PhonoscopeThemeState: Decodable, Equatable {
     let groupId: String
+    let entryId: String
     let themeId: String
-    let themeIndex: Int
+    let entryIndex: Int
+    let settingsGroupIds: [String]?
     let paused: Bool
     let revision: Int
     let changedAtMs: Double
@@ -391,6 +457,10 @@ struct PhonoscopeSignalFrame: Equatable, Sendable {
     var beatIndex: Int
     var barPhase: Double
     var barIndex: Int
+    /// Beats per bar. Carried on the frame so the driver evaluator can turn a
+    /// downbeat cycle into a period without reaching back into the analysis.
+    /// Defaults to 4 so existing frame construction keeps compiling.
+    var timeSignature: Int = 4
     var downbeatPulse: Double
     var energy: Double
     var valence: Double
