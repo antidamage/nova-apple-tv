@@ -558,10 +558,12 @@ A Metal-rendered animated field that mirrors the web dashboard's background.
   surface, a 75% grey label, and no tvOS focus effect. The bar dismisses as soon
   as its action loses focus.
 - Swiping down reveals a three-button theme transport at the top of the
-  visualiser. Previous and next select the adjacent configured theme using a
-  one-second interpolation; pause freezes the current interpolated frame and
-  resume continues from that exact frame. Manual selection while paused lands
-  on the adjacent theme and remains paused. The transport uses a charcoal panel
+  visualiser. Prev group and next group step sideways to the adjacent colour
+  theme group and land on its first entry, playing the transition the departing
+  entry authored; the group's own sequence keeps rotating. Pause freezes the
+  current interpolated frame and resume continues from that exact frame — the
+  transport's only hold. Stepping groups while paused stays paused. The
+  transport uses a charcoal panel
   and charcoal focused control with the dashboard highlight colour as its focus
   outline, and dismisses when none of its buttons retains focus.
 

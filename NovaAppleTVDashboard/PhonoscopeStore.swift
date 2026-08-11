@@ -16,10 +16,53 @@ final class PhonoscopeStore: ObservableObject {
     @Published private(set) var resolvedModuleSettings: [String: Double] = [:]
     @Published private(set) var driverInterpolatedSettingIDs: Set<String> = []
     @Published private(set) var messageScale = 1.0
-    /// The centre image's base height, as a fraction of the frame.
+    /// The centre image's base size, as fractions of the frame. Width is the
+    /// authored axis; height is read only under a manual fit with
+    /// `centreImageProportional` off. See `phonoscopeImageHalfExtent`.
     @Published private(set) var centreImageHeight = PhonoscopeCentreImage.defaultHeightPercent / 100
-    /// Centre-image library id to fetchable URL, from the config envelope.
+    @Published private(set) var centreImageWidth = PhonoscopeCentreImage.defaultHeightPercent / 100
+    @Published private(set) var centreImageFit: PhonoscopeImageFit = .manual
+    @Published private(set) var centreImageProportional = true
+    /// Image library id to fetchable URL, from the config envelope. Serves both
+    /// slots — the centre image and the background image — because it is one
+    /// library keyed by id.
     private var centreImageUrls: [String: String] = [:]
+
+    /// The centre image that is LEAVING, while a transition runs. Nil the rest
+    /// of the time, which is what tells the Metal pass there is one plane.
+    @Published private(set) var centreImageFromURL: URL?
+    /// The transition's progress, 0 to 1, already shaped by the authored ramp.
+    @Published private(set) var centreImageProgress: Double = 1
+    /// How the change is being made, LATCHED when it started.
+    ///
+    /// The initiator owns the transition: these are the values Nova published
+    /// alongside the entry change, resolved from the settings groups that were
+    /// in effect when the pulse fired — the entry being left, not the one being
+    /// arrived at — and they are held unchanged until the run finishes.
+    @Published private(set) var centreTransition = PhonoscopeCentreTransitionParams()
+    /// The image the latch is currently against, so a change can be spotted.
+    private var latchedCentreImageURL: URL?
+    private var centreTransitionElapsed: Double = 0
+    private var centreTransitionAttack: Double = 0
+    private var centreTransitionHold: Double = 0
+    private var centreTransitionRelease: Double = 0.6
+    /// The shape Nova published with its latest selection, waiting for the image
+    /// change it describes. Nil while an older dashboard is publishing no shape
+    /// at all, in which case the picture keeps the cross-fade it always had.
+    private var pendingCentreTransition: PhonoscopeTransitionState?
+
+    /// The backdrop slot, mirroring the centre's above and on its own clock:
+    /// the two change at the same moment but run independently, so the backdrop
+    /// can still be dissolving after the centrepiece has landed.
+    @Published private(set) var backgroundImageFromURL: URL?
+    @Published private(set) var backgroundImageProgress: Double = 1
+    @Published private(set) var backgroundTransition = PhonoscopeCentreTransitionParams()
+    private var latchedBackgroundImageURL: URL?
+    private var backgroundTransitionElapsed: Double = 0
+    private var backgroundTransitionAttack: Double = 0
+    private var backgroundTransitionHold: Double = 0
+    private var backgroundTransitionRelease: Double = 0.6
+    private var pendingBackgroundTransition: PhonoscopeTransitionState?
 
     /// What the centre of the frame holds. Only the local Metal fallback draws
     /// this: on the streamed path it is already baked into the picture.
@@ -51,6 +94,18 @@ final class PhonoscopeStore: ObservableObject {
         else { return .nothing }
         return .image(url)
     }
+    /// The live theme's backdrop, or nil when it names none — which is what
+    /// makes the procedural field draw. Resolved from the same library as the
+    /// centre image, because it IS the same library: a theme names which entry
+    /// goes where and the library has no opinion.
+    ///
+    /// No message clause, unlike `centreSlot`: nothing overrides the backdrop.
+    var backgroundImageURL: URL? {
+        guard let imageId = activeColorTheme?.backgroundImageId,
+              let path = centreImageUrls[imageId]
+        else { return nil }
+        return URL(string: path, relativeTo: AppConfig.dashboardBaseURL)
+    }
     /// Final glow overlay, already resolved for this frame.
     @Published private(set) var glowOverlay = PhonoscopeGlowOverlaySettings()
     /// Frame geometry, vignette and scene blend, resolved through the same
@@ -77,6 +132,9 @@ final class PhonoscopeStore: ObservableObject {
     /// one theme can appear several times with different settings groups.
     private var currentColorEntryID: String?
     private var currentColorThemeID: String?
+    /// Nova's household alt state. Only the local fallback rotation consults
+    /// it: an authoritative state arrives with `themeId` already resolved.
+    private var altThemeActive = false
     /// The settings groups Nova says the live entry is running.
     private var selectedSettingsGroupIds: [String] = []
     private var themeTarget: DashboardTheme?
@@ -113,6 +171,9 @@ final class PhonoscopeStore: ObservableObject {
     private var themeSelectionTransitionForward = true
     private var authoritativeThemeRevision = -1
     private var hasAuthoritativeThemeState = false
+    /// The colour group Nova says is live. Nil only on a cold client, which is
+    /// the one case that falls back to re-deriving the group from config.
+    private var authoritativeGroupID: String?
     /// Per driver-slot envelope state, owned here and threaded through the
     /// shared evaluator in PhonoscopeDrivers.swift.
     private var parameterDriverStates: [String: PhonoscopeDriverSlotState] = [:]
@@ -169,6 +230,7 @@ final class PhonoscopeStore: ObservableObject {
         themeTarget = nil
         authoritativeThemeRevision = -1
         hasAuthoritativeThemeState = false
+        authoritativeGroupID = nil
     }
 
     func setHousePartyEnabled(_ enabled: Bool, fallbackTheme: DashboardTheme) {
@@ -230,8 +292,13 @@ final class PhonoscopeStore: ObservableObject {
         Task { [weak self] in await self?.sendThemeCommand(action) }
     }
 
-    func stepTheme(forward: Bool) {
-        Task { [weak self] in await self?.sendThemeCommand(forward ? "next" : "previous") }
+    /// Steps sideways to the next or previous colour theme GROUP, landing on
+    /// its first entry. The sequence inside a group is left to run; only the
+    /// pause button holds it.
+    func stepThemeGroup(forward: Bool) {
+        Task { [weak self] in
+            await self?.sendThemeCommand(forward ? "next-group" : "previous-group")
+        }
     }
 
     private func runHouseParty(generation: Int) async {
@@ -545,15 +612,24 @@ final class PhonoscopeStore: ObservableObject {
     private func applyAuthoritativeTheme(_ state: PhonoscopeThemeState) {
         hasAuthoritativeThemeState = true
         themeSwitchingPaused = state.paused
+        // Kept current even on a revision this client already holds, so that
+        // dropping back to the local fallback resumes on the right side of the
+        // flip rather than on whatever it last saw.
+        altThemeActive = state.altActive ?? false
+        // Kept current on every reply for the same reason as the alt state, and
+        // taken on trust: a remote group step and genre routing both land here,
+        // and neither is something this client can re-derive from config.
+        authoritativeGroupID = state.groupId.isEmpty ? nil : state.groupId
         guard state.revision != authoritativeThemeRevision else { return }
         authoritativeThemeRevision = state.revision
-        guard let group = activeColorGroup, group.id == state.groupId else { return }
+        guard let group = activeColorGroup else { return }
         let entry = group.entries.first(where: { $0.id == state.entryId })
         // Resolve the published theme id rather than the entry's own. They are
         // the same during normal rotation, but a solo holds the picture on a
-        // theme that need not appear in this group's playlist at all.
+        // theme that need not appear in this group's playlist at all, and the
+        // published id already has the household's alt state applied.
         guard let selected = colorTheme(id: state.themeId)
-            ?? entry.flatMap({ colorTheme(id: $0.themeId) })
+            ?? entry.flatMap({ resolvedTheme(for: $0) })
         else { return }
 
         currentThemeVariant = nil
@@ -563,6 +639,11 @@ final class PhonoscopeStore: ObservableObject {
         // with the previous entry still swaps its drivers.
         selectedSettingsGroupIds = state.settingsGroupIds ?? entry?.settingsGroupIds ?? []
         themeStateTransitionSeconds = state.transitionSeconds
+        // Held until the centre image actually changes. A rotation step that
+        // lands on an entry with the same image is not a transition at all, so
+        // there is nothing for this to describe yet.
+        pendingCentreTransition = state.transition
+        pendingBackgroundTransition = state.backgroundTransition
         activeColorTheme = selected
         parameterDriverStates = [:]
         let target = dashboardTheme(for: selected)
@@ -667,6 +748,10 @@ final class PhonoscopeStore: ObservableObject {
 
     private var activeColorGroup: PhonoscopeColorGroup? {
         guard let configuration else { return nil }
+        if let id = authoritativeGroupID,
+           let published = configuration.colorGroups?.first(where: { $0.id == id }) {
+            return published
+        }
         let previewGroupID = configuration.editorPreviewColorGroupId.flatMap { $0.isEmpty ? nil : $0 }
         guard let id = previewGroupID
             ?? configuration.moduleColorGroupIds?[configuration.activeModuleId]
@@ -714,7 +799,7 @@ final class PhonoscopeStore: ObservableObject {
             let currentIndex = currentColorEntryID.flatMap { id in candidates.firstIndex { $0.id == id } }
             let nextIndex = destinationIndex(current: currentIndex, count: candidates.count)
             let entry = candidates[nextIndex]
-            guard let next = colorTheme(id: entry.themeId) else { return nil }
+            guard let next = resolvedTheme(for: entry) else { return nil }
             currentThemeVariant = nil
             currentColorEntryID = entry.id
             currentColorThemeID = next.id
@@ -758,7 +843,7 @@ final class PhonoscopeStore: ObservableObject {
             entry = candidates[0]
         }
         if !force, entry.id == currentColorEntryID { return }
-        guard let next = colorTheme(id: entry.themeId) else { return }
+        guard let next = resolvedTheme(for: entry) else { return }
         currentThemeVariant = nil
         currentColorEntryID = entry.id
         currentColorThemeID = next.id
@@ -780,6 +865,21 @@ final class PhonoscopeStore: ObservableObject {
     /// Looks a colour theme up in the flat library.
     private func colorTheme(id: String) -> PhonoscopeColorTheme? {
         configuration?.colorThemes?.first { $0.id == id }
+    }
+
+    /// The theme an entry shows right now, for the local fallback rotation.
+    ///
+    /// The alt state is the household's and the alt link is the entry's, so an
+    /// entry with no alt keeps its own colours rather than blanking, and the
+    /// state stays on for the next entry that does have one. When Nova's
+    /// authoritative state is arriving this is not consulted at all: `themeId`
+    /// on that state is already resolved the same way.
+    private func resolvedTheme(for entry: PhonoscopeColorGroupEntry) -> PhonoscopeColorTheme? {
+        if altThemeActive, let altID = entry.altThemeId, !altID.isEmpty,
+           let alt = colorTheme(id: altID) {
+            return alt
+        }
+        return colorTheme(id: entry.themeId)
     }
 
     private func advanceTheme() {
@@ -906,15 +1006,43 @@ final class PhonoscopeStore: ObservableObject {
             // The centre image's base height, as a percentage of the frame. A
             // separate axis from the scale above: this is how big the image is,
             // that is a multiplier on top of it.
+            PhonoscopeEffectID.centreWidth: PhonoscopeEffectDeclaration(
+                id: PhonoscopeEffectID.centreWidth, min: 0, max: 100, step: 1,
+                defaultValue: PhonoscopeCentreImage.defaultHeightPercent),
             PhonoscopeEffectID.centreHeight: PhonoscopeEffectDeclaration(
                 id: PhonoscopeEffectID.centreHeight, min: 0, max: 100, step: 1,
                 defaultValue: PhonoscopeCentreImage.defaultHeightPercent),
+            // 0 manual, 1 fit to screen, 2 fill screen. Append-only.
+            PhonoscopeEffectID.centreFit: PhonoscopeEffectDeclaration(
+                id: PhonoscopeEffectID.centreFit, min: 0,
+                max: Double(PhonoscopeImageFit.modeCount - 1), step: 1, defaultValue: 0),
+            // On by default: keeping the source's proportions is what every
+            // centre image authored before this axis existed was doing.
+            PhonoscopeEffectID.centreProportional: PhonoscopeEffectDeclaration(
+                id: PhonoscopeEffectID.centreProportional, min: 0, max: 1, step: 1,
+                defaultValue: 1),
             PhonoscopeEffectID.backgroundHeight: PhonoscopeEffectDeclaration(
                 id: PhonoscopeEffectID.backgroundHeight, min: 0, max: 100, step: 1,
                 defaultValue: 33),
             PhonoscopeEffectID.backgroundWidth: PhonoscopeEffectDeclaration(
                 id: PhonoscopeEffectID.backgroundWidth, min: 0, max: 100, step: 1,
                 defaultValue: 100),
+            // 1 is the identity, so an existing band is exactly the band it was.
+            PhonoscopeEffectID.backgroundScale: PhonoscopeEffectDeclaration(
+                id: PhonoscopeEffectID.backgroundScale,
+                min: PhonoscopeImageScale.minimum, max: PhonoscopeImageScale.maximum,
+                step: 0.1, defaultValue: 1),
+            PhonoscopeEffectID.backgroundFit: PhonoscopeEffectDeclaration(
+                id: PhonoscopeEffectID.backgroundFit, min: 0,
+                max: Double(PhonoscopeImageFit.modeCount - 1), step: 1, defaultValue: 0),
+            PhonoscopeEffectID.backgroundProportional: PhonoscopeEffectDeclaration(
+                id: PhonoscopeEffectID.backgroundProportional, min: 0, max: 1, step: 1,
+                defaultValue: 1),
+            // The four `__bgTransition*` axes are deliberately NOT declared here,
+            // exactly as the centre's are not: the dashboard latches them when
+            // the change fires and publishes the answer on the theme state,
+            // because the initiator owns the transition and this side has no way
+            // to know which entry a change started from.
             // 96% and 1 are the authored PhonoscopeEdgeVignette exactly, so an
             // undriven frame is the one that was always drawn. Size stays a
             // plain multiplier rather than a percentage because it can go past
@@ -976,6 +1104,13 @@ final class PhonoscopeStore: ObservableObject {
         centreImageHeight = min(max(
             values[PhonoscopeEffectID.centreHeight]
                 ?? PhonoscopeCentreImage.defaultHeightPercent, 0), 100) / 100
+        centreImageWidth = min(max(
+            values[PhonoscopeEffectID.centreWidth]
+                ?? PhonoscopeCentreImage.defaultHeightPercent, 0), 100) / 100
+        centreImageFit = PhonoscopeImageFit(value: values[PhonoscopeEffectID.centreFit] ?? 0)
+        centreImageProportional = (values[PhonoscopeEffectID.centreProportional] ?? 1) >= 0.5
+        advanceCentreTransition(delta: signal.delta)
+        advanceBackgroundTransition(delta: signal.delta)
         glowOverlay = PhonoscopeGlowOverlaySettings(
             blurAmount: values[PhonoscopeEffectID.glowBlur] ?? 0,
             opacity: values[PhonoscopeEffectID.glowOpacity] ?? 0,
@@ -990,6 +1125,12 @@ final class PhonoscopeStore: ObservableObject {
         pictureFrame = PhonoscopePictureFrame(
             backgroundHeight: (values[PhonoscopeEffectID.backgroundHeight] ?? 33) / 100,
             backgroundWidth: (values[PhonoscopeEffectID.backgroundWidth] ?? 100) / 100,
+            // A plain multiplier rather than a percentage, so no divide.
+            backgroundScale: values[PhonoscopeEffectID.backgroundScale] ?? 1,
+            backgroundFit: PhonoscopeImageFit(
+                value: values[PhonoscopeEffectID.backgroundFit] ?? 0),
+            backgroundProportional:
+                (values[PhonoscopeEffectID.backgroundProportional] ?? 1) >= 0.5,
             vignetteOpacity: (values[PhonoscopeEffectID.vignetteOpacity] ?? 96) / 100,
             vignetteSize: values[PhonoscopeEffectID.vignetteSize] ?? 1,
             // Mirrors nova::sceneBlendModeFor.
@@ -1007,6 +1148,86 @@ final class PhonoscopeStore: ObservableObject {
         driverInterpolatedSettingIDs = Set(evaluation.driven.filter { id in
             module.settings.contains { $0.id == id }
         })
+    }
+
+    /// Runs the centre image's transition: spots a change, latches how it is to
+    /// be made, and walks its progress.
+    ///
+    /// Port of the block in `Simulation::submit` / `advanceConfiguration` that
+    /// does the same in nova-visualiser, and it makes the same two decisions
+    /// for the same reasons:
+    ///
+    ///  - The latch happens at the instant the image changes, because the entry
+    ///    the change STARTS from owns the transition. Reading the published
+    ///    shape again next tick would let the entry being arrived at rewrite a
+    ///    transition already halfway through, since the rotation swaps the
+    ///    settings groups on the way past.
+    ///  - A transition that has begun always finishes, even under a pause. A
+    ///    manual skip pauses the rotation, and stranding the progress at 0 would
+    ///    hold the OUTGOING image on screen permanently.
+    private func advanceCentreTransition(delta: Double) {
+        var target: URL?
+        if case .image(let url) = centreSlot { target = url }
+
+        if target != latchedCentreImageURL {
+            centreImageFromURL = latchedCentreImageURL
+            latchedCentreImageURL = target
+            centreTransitionElapsed = 0
+            let shape = pendingCentreTransition
+            centreTransitionAttack = max(0, shape?.attackSeconds ?? 0)
+            centreTransitionHold = max(0, shape?.holdSeconds ?? 0)
+            centreTransitionRelease = max(0, shape?.releaseSeconds ?? 0.6)
+            centreTransition = shape?.params ?? PhonoscopeCentreTransitionParams()
+            let length = centreTransitionAttack + centreTransitionHold + centreTransitionRelease
+            // Nothing to leave from, or no time to do it in, means it is simply
+            // there — a first paint should not fly on from off screen.
+            centreImageProgress = (centreImageFromURL != nil && length > 0) ? 0 : 1
+            if centreImageProgress >= 1 { centreImageFromURL = nil }
+        }
+
+        guard centreImageProgress < 1 else { return }
+        centreTransitionElapsed += max(0, delta)
+        centreImageProgress = phonoscopeTransitionRamp(
+            elapsed: centreTransitionElapsed,
+            attack: centreTransitionAttack,
+            hold: centreTransitionHold,
+            release: centreTransitionRelease)
+        if centreImageProgress >= 1 { centreImageFromURL = nil }
+    }
+
+    /// The backdrop's transition, on exactly the same terms as the centre's
+    /// above and on its own clock — the two slots change at the same moment but
+    /// run independently, which is the whole reason they have separate axes.
+    ///
+    /// No message clause, unlike the centre: nothing overrides the backdrop.
+    private func advanceBackgroundTransition(delta: Double) {
+        let target = backgroundImageURL
+
+        if target != latchedBackgroundImageURL {
+            backgroundImageFromURL = latchedBackgroundImageURL
+            latchedBackgroundImageURL = target
+            backgroundTransitionElapsed = 0
+            let shape = pendingBackgroundTransition
+            backgroundTransitionAttack = max(0, shape?.attackSeconds ?? 0)
+            backgroundTransitionHold = max(0, shape?.holdSeconds ?? 0)
+            backgroundTransitionRelease = max(0, shape?.releaseSeconds ?? 0.6)
+            backgroundTransition = shape?.params ?? PhonoscopeCentreTransitionParams()
+            let length = backgroundTransitionAttack + backgroundTransitionHold
+                + backgroundTransitionRelease
+            // Nothing to leave from, or no time to do it in, means it is simply
+            // there — a first paint should not fly on from off screen.
+            backgroundImageProgress = (backgroundImageFromURL != nil && length > 0) ? 0 : 1
+            if backgroundImageProgress >= 1 { backgroundImageFromURL = nil }
+        }
+
+        guard backgroundImageProgress < 1 else { return }
+        backgroundTransitionElapsed += max(0, delta)
+        backgroundImageProgress = phonoscopeTransitionRamp(
+            elapsed: backgroundTransitionElapsed,
+            attack: backgroundTransitionAttack,
+            hold: backgroundTransitionHold,
+            release: backgroundTransitionRelease)
+        if backgroundImageProgress >= 1 { backgroundImageFromURL = nil }
     }
 
     private func resolveTrack(_ identity: PhonoscopeTrackIdentity) async {

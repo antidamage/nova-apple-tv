@@ -59,6 +59,7 @@ struct PhonoscopeView: View {
                     reloadGeneration: phonoscope.configuration?.moduleReloadGenerations[phonoscope.module?.id ?? ""] ?? 0,
                     letterboxedBackground: usesLetterboxedBackground,
                     glowOverlay: phonoscope.glowOverlay,
+                    centreImage: centreImageState,
                     measuredFramesPerSecond: $fallbackFramesPerSecond
                 )
                 .ignoresSafeArea()
@@ -86,25 +87,26 @@ struct PhonoscopeView: View {
             //
             // Which of the two is showing is `phonoscope.centreSlot`, resolved
             // in the same order as `Simulation::submit` in nova-visualiser.
+            //
+            // Only the MESSAGE is here. The image half moved into the Metal pass
+            // (`encodeCentreImagePass`), which runs the same three transitions
+            // the streamed renderer does — a flip or a slide is a per-fragment
+            // transform of the image plane, not something a SwiftUI transition
+            // can approximate, and the two engines have to agree exactly.
             if !usesStreamedRenderer {
                 // The glow overlay is the last pass over the picture and the
-                // centre slot is part of the picture, so it glows too. On the
+                // message is part of the picture, so it glows too. On the
                 // streamed renderer that is literally one pass over the
-                // finished frame; here the slot lives in SwiftUI above the
+                // finished frame; here the message lives in SwiftUI above the
                 // Metal view, which cannot be sampled a second time, so the
                 // same blur/blend is applied to the layer itself. Close, but
                 // not identical: a fallback approximation of an effect the
-                // streamed path does exactly.
-                switch phonoscope.centreSlot {
-                case .nothing:
-                    EmptyView()
-                case let .message(message):
+                // streamed path does exactly. The image, now inside the Metal
+                // chain, is under the real overlay pass and needs no such
+                // approximation.
+                if case let .message(message) = phonoscope.centreSlot {
                     messageLayer(message)
                         .glowOverlay(phonoscope.glowOverlay) { messageLayer(message) }
-                        .allowsHitTesting(false)
-                case let .image(url):
-                    imageLayer(url)
-                        .glowOverlay(phonoscope.glowOverlay) { imageLayer(url) }
                         .allowsHitTesting(false)
                 }
             }
@@ -265,13 +267,24 @@ struct PhonoscopeView: View {
     private var backdropBand: FluidBackgroundBand {
         let vignette = phonoscope.activeColorTheme?.colors["vignette"]?.vector
             ?? SIMD4<Float>(0, 0, 0, 1)
+        // The theme's backdrop image, if it names one, plus how it is fitted.
+        // The extent itself is resolved in the renderer, where the decoded
+        // texture's proportions are known.
+        let frame = phonoscope.pictureFrame
         return FluidBackgroundBand(
             isEnabled: true,
-            heightFraction: Float(min(max(phonoscope.pictureFrame.backgroundHeight, 0), 1)),
-            widthFraction: Float(min(max(phonoscope.pictureFrame.backgroundWidth, 0), 1)),
+            heightFraction: Float(min(max(frame.backgroundHeight, 0), 1)),
+            widthFraction: Float(min(max(frame.backgroundWidth, 0), 1)),
             vignetteColor: vignette,
-            vignetteOpacity: Float(min(max(phonoscope.pictureFrame.vignetteOpacity, 0), 1)),
-            vignetteSize: Float(max(phonoscope.pictureFrame.vignetteSize, 0))
+            vignetteOpacity: Float(min(max(frame.vignetteOpacity, 0), 1)),
+            vignetteSize: Float(max(frame.vignetteSize, 0)),
+            imageTo: phonoscope.backgroundImageURL,
+            imageFrom: phonoscope.backgroundImageFromURL,
+            imageScale: Float(frame.backgroundScale),
+            imageFit: frame.backgroundFit,
+            imageProportional: frame.backgroundProportional,
+            imageProgress: Float(phonoscope.backgroundImageProgress),
+            imageParams: phonoscope.backgroundTransition
         )
     }
 
@@ -325,8 +338,8 @@ struct PhonoscopeView: View {
     private var themeBar: some View {
         VStack(spacing: 0) {
             HStack(spacing: 16) {
-                themeControl(title: "PREVIOUS", symbol: "backward.fill", control: .previous) {
-                    phonoscope.stepTheme(forward: false)
+                themeControl(title: "PREV GROUP", symbol: "backward.fill", control: .previous) {
+                    phonoscope.stepThemeGroup(forward: false)
                 }
                 themeControl(
                     title: phonoscope.themeSwitchingPaused ? "RESUME" : "PAUSE",
@@ -335,8 +348,8 @@ struct PhonoscopeView: View {
                 ) {
                     phonoscope.toggleThemeSwitching()
                 }
-                themeControl(title: "NEXT", symbol: "forward.fill", control: .next) {
-                    phonoscope.stepTheme(forward: true)
+                themeControl(title: "NEXT GROUP", symbol: "forward.fill", control: .next) {
+                    phonoscope.stepThemeGroup(forward: true)
                 }
             }
             .frame(width: 560, height: 92)
@@ -412,29 +425,31 @@ struct PhonoscopeView: View {
         }
     }
 
-    /// The image half of the centre slot, on the local Metal fallback only.
+    /// The image half of the centre slot, handed to the Metal pass.
     ///
-    /// `.scaledToFit()` then `.scaleEffect()` is the SwiftUI spelling of the
-    /// contain-fit-then-scale that `centreImageHalfExtent()` states and
-    /// `centre_image.frag` implements — the same arithmetic, done by the
-    /// framework instead of by hand, with the base height folded into the scale
-    /// so a centre image reads as a centrepiece rather than a backdrop.
-    /// `ParitySelfTests.testCentreImageParity()` locks that the two engines
-    /// agree on what it means.
-    ///
-    /// The cross-fade between two colour themes' images is a SwiftUI transition
-    /// here rather than the streamed path's two-plane dissolve: an
-    /// approximation of the same effect, like the glow above it.
-    private func imageLayer(_ url: URL) -> some View {
-        AsyncImage(url: url) { image in
-            image.resizable().scaledToFit()
-        } placeholder: {
-            Color.clear
+    /// Everything is already resolved by the store — which two images, how far
+    /// through, and the transition the change was latched with. This view only
+    /// carries it across, and only on the local fallback: on the streamed path
+    /// the image is already baked into the picture, so drawing it again would
+    /// double it.
+    private var centreImageState: PhonoscopeCentreImageState {
+        guard !usesStreamedRenderer, case let .image(url) = phonoscope.centreSlot else {
+            // Not showing an image — or showing one that the stream already
+            // drew. Either way the local pass has nothing to do. A transition
+            // still in flight is dropped with it, because there is no picture
+            // left for it to be a transition of.
+            return PhonoscopeCentreImageState()
         }
-        .scaleEffect(CGFloat(phonoscope.centreImageHeight) * phonoscope.messageScale)
-        .id(url)
-        .transition(.opacity)
-        .animation(.linear(duration: phonoscope.settingTransitionSeconds), value: url)
+        return PhonoscopeCentreImageState(
+            to: url,
+            from: phonoscope.centreImageFromURL,
+            progress: phonoscope.centreImageProgress,
+            params: phonoscope.centreTransition,
+            widthFraction: phonoscope.centreImageWidth,
+            heightFraction: phonoscope.centreImageHeight,
+            fit: phonoscope.centreImageFit,
+            proportional: phonoscope.centreImageProportional,
+            scale: phonoscope.messageScale)
     }
 
     private func messageLayer(_ message: String) -> some View {

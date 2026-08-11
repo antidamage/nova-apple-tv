@@ -281,6 +281,143 @@ fragment float4 phonoscope_composite(
     return float4(clamp(color, 0.0, 1.0), clamp(alpha, 0.0, 1.0));
 }
 
+struct PhonoscopeCentreImageUniforms {
+    // Half-extents in normalised frame coordinates, from
+    // PhonoscopeCentreImage/centre_image_reference.h. Contain-fit and scale are
+    // resolved on the CPU so the conformance corpus can lock them.
+    float2 halfExtentTo;
+    float2 halfExtentFrom;
+    // The transition's progress, 0 to 1, already shaped by the authored ramp.
+    float progress;
+    float frameAspect;
+    float axisRadians;
+    // Divisions + 1, resolved on the CPU so the shader never adds one on the
+    // hot path.
+    int segments;
+    // 0 cross-fade, 1 flip, 2 slide.
+    int mode;
+    int hasFrom;
+    int returnFromOrigin;
+};
+
+// Centre-image composite.
+//
+// Port of nova-visualiser/src/shaders/centre_image.frag, uv flip aside: GL's
+// fullscreen triangle hands out a bottom-up uv and Metal's a top-down one, so
+// the very first line converts and everything after it is the same arithmetic
+// on the same numbers. The geometry itself is stated once in
+// PhonoscopeCentreTransition.swift / core/centre_image_transition.h, and the
+// `centre-image` conformance case is what proves the three agree.
+//
+// Drawn between the composite and the glow overlay, so an image blooms with the
+// rest of the picture exactly as the message does.
+static float4 phonoscope_centre_plane(
+    float2 glUV,
+    texture2d<float> image,
+    float2 halfExtent,
+    bool incoming,
+    constant PhonoscopeCentreImageUniforms &uniforms
+) {
+    constexpr sampler linearSampler(address::clamp_to_edge, filter::linear);
+    if (halfExtent.x <= 0.0 || halfExtent.y <= 0.0) { return float4(0.0); }
+
+    float2 centred = (glUV - float2(0.5)) * float2(uniforms.frameAspect, 1.0);
+    if (uniforms.mode != 0) {
+        float2 along = float2(cos(uniforms.axisRadians), sin(uniforms.axisRadians));
+        float2 across = float2(-along.y, along.x);
+        float2 local = float2(dot(centred, along), dot(centred, across));
+
+        if (uniforms.mode == 1) {
+            // Collapse to nothing at the midpoint and back out again. Below the
+            // epsilon the plane is edge-on: there is no image left to sample,
+            // and dividing by it would smear one column of texels across the
+            // frame.
+            float scale = abs(cos(M_PI_F * clamp(uniforms.progress, 0.0, 1.0)));
+            if (scale < 1e-4) { return float4(0.0); }
+            local.x /= scale;
+        } else {
+            // The segment index comes from the ACROSS coordinate, which
+            // displacement never changes -- so a fragment can be asked which
+            // segment it belongs to before knowing where that segment has moved
+            // to, and no search is needed.
+            float2 halfLocal = float2(
+                abs(halfExtent.x * uniforms.frameAspect * along.x) + abs(halfExtent.y * along.y),
+                abs(halfExtent.x * uniforms.frameAspect * across.x) + abs(halfExtent.y * across.y));
+            int index = 0;
+            if (halfLocal.y > 0.0) {
+                float position = (local.y / halfLocal.y) * 0.5 + 0.5;
+                index = clamp(int(floor(position * float(uniforms.segments))), 0, uniforms.segments - 1);
+            }
+            // Alternating by parity: 0 divisions is a solid image, 1 pushes the
+            // two halves apart, 2 sends the outer sections one way and the
+            // middle the other.
+            float direction = (index % 2 == 0) ? 1.0 : -1.0;
+            float frameSpan = 0.5 * (abs(along.x) * uniforms.frameAspect + abs(along.y));
+            float clearDistance = frameSpan + halfLocal.x;
+
+            float clamped = clamp(uniforms.progress, 0.0, 1.0);
+            float offset;
+            if (!incoming) {
+                offset = direction * clearDistance * (clamped * 2.0);
+            } else {
+                float arriving = clamped * 2.0 - 1.0;
+                // Opposite edge carries on the way it left and enters from the
+                // far side; origin edge reverses and comes back the way it went.
+                float travel = uniforms.returnFromOrigin != 0 ? -direction : direction;
+                offset = travel * clearDistance * (arriving - 1.0);
+            }
+            local.x -= offset;
+        }
+
+        centred = along * local.x + across * local.y;
+    }
+
+    float2 texel = centred / float2(uniforms.frameAspect, 1.0) / (halfExtent * 2.0) + float2(0.5);
+    // Outside the fitted rectangle there is no image, which is what makes a
+    // scale above 1 read as a crop rather than a squash -- and what carries a
+    // slid segment off frame rather than wrapping it.
+    if (any(texel < float2(0.0)) || any(texel > float2(1.0))) { return float4(0.0); }
+    // Texture rows are top-down; this coordinate is bottom-up.
+    return image.sample(linearSampler, float2(texel.x, 1.0 - texel.y));
+}
+
+fragment float4 phonoscope_centre_image(
+    PhonoscopeFullscreenOut in [[stage_in]],
+    texture2d<float> imageTo [[texture(0)]],
+    texture2d<float> imageFrom [[texture(1)]],
+    constant PhonoscopeCentreImageUniforms &uniforms [[buffer(0)]]
+) {
+    // GL hands its fullscreen triangle a bottom-up uv and Metal a top-down one.
+    // Converting here and nowhere else is what lets the rest of this be a
+    // line-for-line port.
+    float2 glUV = float2(in.uv.x, 1.0 - in.uv.y);
+    float weight = clamp(uniforms.progress, 0.0, 1.0);
+    bool hasFrom = uniforms.hasFrom != 0;
+    float4 accumulated = float4(0.0);
+
+    if ((uniforms.mode == 1 || uniforms.mode == 2) && hasFrom) {
+        // Exactly one plane at a time. For the flip the swap IS the midpoint,
+        // which is what makes it read as one object turning over rather than as
+        // two images blending through each other; for the slide the outgoing
+        // image is off frame by the time the incoming one starts arriving, so
+        // the two legs never overlap and neither needs fading.
+        accumulated = weight >= 0.5
+            ? phonoscope_centre_plane(glUV, imageTo, uniforms.halfExtentTo, true, uniforms)
+            : phonoscope_centre_plane(glUV, imageFrom, uniforms.halfExtentFrom, false, uniforms);
+    } else {
+        accumulated = phonoscope_centre_plane(glUV, imageTo, uniforms.halfExtentTo, true, uniforms) * weight;
+        if (hasFrom) {
+            // Both sides are premultiplied and the weights sum to 1, so a
+            // straight weighted sum is the cross-dissolve -- no over-composite,
+            // which would make the outgoing image show through the incoming
+            // one's transparent parts at full strength for the whole transition.
+            accumulated += phonoscope_centre_plane(glUV, imageFrom, uniforms.halfExtentFrom, false, uniforms)
+                * (1.0 - weight);
+        }
+    }
+    return accumulated;
+}
+
 struct PhonoscopeGlowUniforms {
     // Texel size on the blur axis only; the other component is zero. Unused by
     // the overlay pass.

@@ -65,6 +65,7 @@ struct ClimateExpandedControls: View {
                 quietSwitch: devices.quietSwitch,
                 turboSwitch: devices.turboSwitch,
                 preferences: state.preferences?.aircon,
+                controlState: state.climateControl?.lounge,
                 focus: focus,
                 editingFocus: $editingFocus,
                 editMove: editMove,
@@ -115,6 +116,7 @@ struct AirConditionerPanel: View {
     let quietSwitch: DashboardEntity?
     let turboSwitch: DashboardEntity?
     let preferences: AirconPreferences?
+    let controlState: ClimateControlRoomState?
     var focus: FocusState<DashboardFocus?>.Binding
     @Binding var editingFocus: DashboardFocus?
     let editMove: DashboardEditMove?
@@ -129,6 +131,15 @@ struct AirConditionerPanel: View {
             ClimateHeader(title: "AIR CONDITIONER", entity: aircon)
 
             if let aircon {
+                if controlState?.owner == "external" {
+                    Text("MANUAL — DEVICE OVERRIDE. NOVA AUTOMATION PAUSED.")
+                        .font(.novaMono(12))
+                        .foregroundStyle(Color.yellow)
+                } else if controlState?.phase == "grace" {
+                    Text("WAITING FOR TEMPERATURE — AUTO STOPS AFTER TWO MINUTES")
+                        .font(.novaMono(12))
+                        .foregroundStyle(Color.cyan)
+                }
                 let isControlOn = aircon.isOn || isAutoActive
                 // Sub-control groups flow left->right inside the one bounding
                 // rect; each icon menu is a vertical square stack (top = old
@@ -138,11 +149,11 @@ struct AirConditionerPanel: View {
                     // 2-column button grid with equal vertical & horizontal gaps.
                     HStack(alignment: .top, spacing: climateButtonGap) {
                         VStack(spacing: climateButtonGap) {
-                            AirconPowerButton(zoneID: zoneID, entity: aircon, state: .auto, preferences: preferences, focus: focus)
+                            AirconPowerButton(zoneID: zoneID, entity: aircon, state: .auto, preferences: preferences, controlState: controlState, focus: focus)
                                 .frame(width: climateButtonSize, height: climateButtonSize)
-                            AirconPowerButton(zoneID: zoneID, entity: aircon, state: .manual, preferences: preferences, focus: focus)
+                            AirconPowerButton(zoneID: zoneID, entity: aircon, state: .manual, preferences: preferences, controlState: controlState, focus: focus)
                                 .frame(width: climateButtonSize, height: climateButtonSize)
-                            AirconPowerButton(zoneID: zoneID, entity: aircon, state: .off, preferences: preferences, focus: focus)
+                            AirconPowerButton(zoneID: zoneID, entity: aircon, state: .off, preferences: preferences, controlState: controlState, focus: focus)
                                 .frame(width: climateButtonSize, height: climateButtonSize)
                         }
                         VStack(spacing: climateButtonGap) {
@@ -234,9 +245,11 @@ struct AirconPowerButton: View {
     let entity: DashboardEntity
     let state: AirconPowerState
     let preferences: AirconPreferences?
+    let controlState: ClimateControlRoomState?
     var focus: FocusState<DashboardFocus?>.Binding
 
     private var active: Bool {
+        if let mode = controlState?.mode { return mode == state.rawValue }
         switch state {
         case .auto:
             return preferences?.autoMode == true
@@ -289,9 +302,6 @@ struct AirconPowerButton: View {
         case .manual:
             let mode = preferredManualMode(entity: entity, preferred: preferences?.hvacMode)
             var actions = [
-                EntityCommand(entityID: entity.entityID, domain: "climate", service: "turn_on")
-            ]
-            actions.append(
                 EntityCommand(
                     entityID: entity.entityID,
                     domain: "climate",
@@ -299,7 +309,7 @@ struct AirconPowerButton: View {
                     data: ["hvac_mode": mode],
                     remember: ["aircon": ["autoMode": false, "hvacMode": mode]]
                 )
-            )
+            ]
             if let temperature = preferences?.temperature ?? entity.targetTemperature {
                 actions.append(
                     EntityCommand(
