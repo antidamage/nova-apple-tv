@@ -132,6 +132,13 @@ enum PhonoscopeSceneBlendMode: Int, Equatable {
 struct PhonoscopePictureFrame: Equatable {
     var backgroundHeight: Double = 1.0 / 3.0
     var backgroundWidth: Double = 1
+    /// The rest of the size control set. With a background image on the live
+    /// theme these size the image; with none they size the band above, exactly
+    /// as they always have. The scale multiplies in every mode, which is what
+    /// makes the backdrop able to thump on the beat.
+    var backgroundScale: Double = 1
+    var backgroundFit: PhonoscopeImageFit = .manual
+    var backgroundProportional: Bool = true
     var vignetteOpacity: Double = 0.96
     var vignetteSize: Double = 1
     var sceneBlendMode: PhonoscopeSceneBlendMode = .linear
@@ -160,6 +167,67 @@ struct PhonoscopeGlowOverlaySettings: Equatable {
     }
 }
 
+/// What the centre slot's image half is doing this frame.
+///
+/// The image moved off SwiftUI and into the Metal pass so the Apple TV runs the
+/// same three transitions the streamed renderer does rather than approximating
+/// them with `.transition(.opacity)`. Everything here is already resolved by
+/// `PhonoscopeStore`: which two images, how far through, and the transition the
+/// change was LATCHED with when it started.
+struct PhonoscopeCentreImageState: Equatable {
+    var to: URL?
+    var from: URL?
+    /// 0 to 1, already shaped by the authored ramp.
+    var progress: Double = 1
+    var params = PhonoscopeCentreTransitionParams()
+    /// Base size as fractions of the frame, how it is fitted, and the driven
+    /// multiplier on top. Width is the authored axis; height is read only under
+    /// a manual fit with `proportional` off.
+    var widthFraction: Double = PhonoscopeCentreImage.defaultHeightPercent / 100
+    var heightFraction: Double = PhonoscopeCentreImage.defaultHeightPercent / 100
+    var fit: PhonoscopeImageFit = .manual
+    var proportional: Bool = true
+    var scale: Double = 1
+
+    var isActive: Bool { to != nil || from != nil }
+}
+
+/// Uniforms for `phonoscope_centre_image`. Layout must match the Metal struct.
+private struct PhonoscopeCentreImageUniforms {
+    var halfExtentTo: SIMD2<Float> = .zero
+    var halfExtentFrom: SIMD2<Float> = .zero
+    var progress: Float = 1
+    var frameAspect: Float = 0
+    var axisRadians: Float = 0
+    var segments: Int32 = 1
+    var mode: Int32 = 0
+    var hasFrom: Int32 = 0
+    var returnFromOrigin: Int32 = 0
+}
+
+/// Half-extents of a drawn image, as the Metal passes want them.
+///
+/// A thin SIMD wrapper over `phonoscopeImageHalfExtent`, which is the shared
+/// port of `nova::imageHalfExtent` and is what
+/// `ParitySelfTests.testCentreImageParity()` locks against the renderer. Used by
+/// BOTH slots: the centre image and the background image are sized by the same
+/// control set.
+func phonoscopeImageHalfExtentSIMD(
+    frameAspect: Double,
+    imageAspect: Double,
+    widthFraction: Double,
+    heightFraction: Double,
+    scale: Double,
+    fit: PhonoscopeImageFit,
+    proportional: Bool
+) -> SIMD2<Float> {
+    let extent = phonoscopeImageHalfExtent(
+        frameAspect: frameAspect, imageAspect: imageAspect,
+        widthFraction: widthFraction, heightFraction: heightFraction,
+        scale: scale, fit: fit, proportional: proportional)
+    return SIMD2(Float(extent.halfWidth), Float(extent.halfHeight))
+}
+
 struct MetalPhonoscopeView: UIViewRepresentable {
     let module: PhonoscopeModule?
     let signal: PhonoscopeSignalFrame
@@ -172,6 +240,7 @@ struct MetalPhonoscopeView: UIViewRepresentable {
     let reloadGeneration: Int
     let letterboxedBackground: Bool
     let glowOverlay: PhonoscopeGlowOverlaySettings
+    let centreImage: PhonoscopeCentreImageState
     @Binding var measuredFramesPerSecond: Double
 
     func makeCoordinator() -> MetalPhonoscopeCoordinator {
@@ -199,6 +268,7 @@ struct MetalPhonoscopeView: UIViewRepresentable {
         renderer.view = view
         renderer.letterboxedBackground = letterboxedBackground
         renderer.glowOverlay = glowOverlay
+        renderer.centreImage = centreImage
         let fpsBinding = $measuredFramesPerSecond
         renderer.onFPSUpdate = { fpsBinding.wrappedValue = $0 }
         context.coordinator.simulation.start()
@@ -218,6 +288,7 @@ struct MetalPhonoscopeView: UIViewRepresentable {
     func updateUIView(_ uiView: UIView, context: Context) {
         context.coordinator.renderer?.letterboxedBackground = letterboxedBackground
         context.coordinator.renderer?.glowOverlay = glowOverlay
+        context.coordinator.renderer?.centreImage = centreImage
         let fpsBinding = $measuredFramesPerSecond
         context.coordinator.renderer?.onFPSUpdate = { fpsBinding.wrappedValue = $0 }
         if let view = uiView as? MTKView {
@@ -280,6 +351,9 @@ final class MetalPhonoscopeRenderer: NSObject, MTKViewDelegate {
     private let compositeToFramePipeline: MTLRenderPipelineState
     private let glowBlurPipeline: MTLRenderPipelineState
     private let glowOverlayPipeline: MTLRenderPipelineState
+    // The centre slot's image half, drawn between the composite and the glow
+    // overlay so it blooms with the rest of the picture.
+    private let centreImagePipeline: MTLRenderPipelineState
     private var particleBuffer: MTLBuffer?
     private var particleCapacity = 0
     private var hdrTexture: MTLTexture?
@@ -300,7 +374,15 @@ final class MetalPhonoscopeRenderer: NSObject, MTKViewDelegate {
     private var completedFramesInWindow = 0
     var letterboxedBackground = false
     var glowOverlay = PhonoscopeGlowOverlaySettings()
+    var centreImage = PhonoscopeCentreImageState()
     var onFPSUpdate: ((Double) -> Void)?
+    /// Decoded centre images, by source URL. Small and long-lived: a colour
+    /// group rotates back through the same handful of images indefinitely, so
+    /// re-decoding a PNG on every pass of the playlist would be pure waste.
+    private var centreImageTextures: [URL: MTLTexture] = [:]
+    /// URLs a load is already in flight for, so a miss on consecutive frames
+    /// starts one download rather than sixty.
+    private var centreImageLoading: Set<URL> = []
 
     init?(device: MTLDevice, simulation: PhonoscopeSimulation) {
         self.device = device
@@ -314,7 +396,8 @@ final class MetalPhonoscopeRenderer: NSObject, MTKViewDelegate {
               let bloomBlur = library.makeFunction(name: "phonoscope_bloom_blur"),
               let composite = library.makeFunction(name: "phonoscope_composite"),
               let glowBlur = library.makeFunction(name: "phonoscope_glow_blur"),
-              let glowOverlay = library.makeFunction(name: "phonoscope_glow_overlay")
+              let glowOverlay = library.makeFunction(name: "phonoscope_glow_overlay"),
+              let centreImage = library.makeFunction(name: "phonoscope_centre_image")
         else { return nil }
         commandQueue = queue
 
@@ -360,6 +443,15 @@ final class MetalPhonoscopeRenderer: NSObject, MTKViewDelegate {
         compositeToFrameDescriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
         let glowBlurDescriptor = fullscreenDescriptor(fragment: glowBlur, format: .bgra8Unorm)
         let glowOverlayDescriptor = fullscreenDescriptor(fragment: glowOverlay, format: .bgra8Unorm)
+        // Drawn OVER whatever the composite left, so it blends rather than
+        // replaces. Premultiplied source, matching the decode below and the
+        // (GL_ONE, GL_ONE_MINUS_SRC_ALPHA) the renderer uses for the same pass.
+        let centreImageDescriptor = fullscreenDescriptor(fragment: centreImage, format: .bgra8Unorm)
+        centreImageDescriptor.colorAttachments[0].isBlendingEnabled = true
+        centreImageDescriptor.colorAttachments[0].sourceRGBBlendFactor = .one
+        centreImageDescriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
+        centreImageDescriptor.colorAttachments[0].sourceAlphaBlendFactor = .one
+        centreImageDescriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
         do {
             particlePipeline = try device.makeRenderPipelineState(
                 descriptor: particleDescriptor(sampleCount: 1)
@@ -376,6 +468,9 @@ final class MetalPhonoscopeRenderer: NSObject, MTKViewDelegate {
             glowBlurPipeline = try device.makeRenderPipelineState(descriptor: glowBlurDescriptor)
             glowOverlayPipeline = try device.makeRenderPipelineState(
                 descriptor: glowOverlayDescriptor
+            )
+            centreImagePipeline = try device.makeRenderPipelineState(
+                descriptor: centreImageDescriptor
             )
         } catch {
             return nil
@@ -536,6 +631,19 @@ final class MetalPhonoscopeRenderer: NSObject, MTKViewDelegate {
         compositeEncoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         compositeEncoder.endEncoding()
 
+        // The centre image goes over the finished composite and UNDER the glow
+        // overlay, so it blooms with the rest of the picture exactly as the
+        // message does. Same position in the draw order as `renderCentreImage`
+        // in nova-visualiser's renderer.
+        encodeCentreImagePass(
+            commandBuffer: commandBuffer,
+            // Whatever the composite just wrote into: the offscreen frame when
+            // the glow overlay is going to read it back, the drawable when it
+            // is not. Loaded rather than cleared, or this pass would erase the
+            // picture it is supposed to sit on.
+            target: overlayActive ? (frameTexture ?? drawable.texture) : drawable.texture
+        )
+
         if overlayActive, let frameTexture, let glowTextureA, let glowTextureB {
             let sigma = overlay.blurSigmaTexels(outputHeight: Double(drawable.texture.height))
             var horizontal = PhonoscopeGlowUniforms(
@@ -601,6 +709,128 @@ final class MetalPhonoscopeRenderer: NSObject, MTKViewDelegate {
         onFPSUpdate?(Double(completedFramesInWindow) / duration)
         fpsWindowStartedAt = timestamp
         completedFramesInWindow = 0
+    }
+
+    /// The centre slot's image half, and whatever transition it is mid-way
+    /// through.
+    ///
+    /// Nothing here decides anything: which two images, how far through, and
+    /// which transition all arrive already resolved and latched from
+    /// `PhonoscopeStore`, because the entry a change STARTS from owns the
+    /// transition and only the store knows which entry that was.
+    private func encodeCentreImagePass(commandBuffer: MTLCommandBuffer, target: MTLTexture) {
+        let state = centreImage
+        guard state.isActive else { return }
+        let to = state.to.flatMap { centreImageTexture($0) }
+        let from = state.from.flatMap { centreImageTexture($0) }
+        // A texture that has not finished downloading yet simply is not drawn.
+        // The alternative is holding the whole picture back on a network fetch.
+        guard to != nil || from != nil else { return }
+
+        let frameAspect = target.height > 0
+            ? Double(target.width) / Double(target.height)
+            : 0
+        func extent(_ texture: MTLTexture?) -> SIMD2<Float> {
+            guard let texture, texture.height > 0 else { return .zero }
+            return phonoscopeImageHalfExtentSIMD(
+                frameAspect: frameAspect,
+                imageAspect: Double(texture.width) / Double(texture.height),
+                widthFraction: state.widthFraction,
+                heightFraction: state.heightFraction,
+                scale: state.scale,
+                fit: state.fit,
+                proportional: state.proportional)
+        }
+
+        var uniforms = PhonoscopeCentreImageUniforms(
+            halfExtentTo: extent(to),
+            halfExtentFrom: extent(from),
+            progress: Float(min(max(state.progress, 0), 1)),
+            frameAspect: Float(frameAspect),
+            axisRadians: Float(state.params.axisRadians),
+            segments: Int32(state.params.segments),
+            mode: Int32(state.params.mode.rawValue),
+            hasFrom: from != nil ? 1 : 0,
+            returnFromOrigin: state.params.returnFromOrigin ? 1 : 0)
+
+        let descriptor = MTLRenderPassDescriptor()
+        descriptor.colorAttachments[0].texture = target
+        descriptor.colorAttachments[0].loadAction = .load
+        descriptor.colorAttachments[0].storeAction = .store
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else { return }
+        encoder.setRenderPipelineState(centreImagePipeline)
+        // Both slots are always bound: the shader reads `imageFrom` only when
+        // `hasFrom` says to, but an unbound slot is undefined behaviour rather
+        // than a black texture, so the incoming image doubles for it.
+        encoder.setFragmentTexture(to ?? from, index: 0)
+        encoder.setFragmentTexture(from ?? to, index: 1)
+        encoder.setFragmentBytes(
+            &uniforms,
+            length: MemoryLayout<PhonoscopeCentreImageUniforms>.stride,
+            index: 0
+        )
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        encoder.endEncoding()
+    }
+
+    /// The decoded texture for a centre image, starting a load on the first miss.
+    ///
+    /// Premultiplied at decode, matching the pipeline's source-one blending and
+    /// the renderer's own decode — an unpremultiplied PNG would halo against
+    /// the picture behind it wherever its alpha is partial.
+    private func centreImageTexture(_ url: URL) -> MTLTexture? {
+        if let cached = centreImageTextures[url] { return cached }
+        guard !centreImageLoading.contains(url) else { return nil }
+        centreImageLoading.insert(url)
+        let device = self.device
+        // Deliberately the callback API rather than async/await: `draw(in:)` and
+        // the cache both live on the main thread, so hopping back with
+        // `DispatchQueue.main.async` keeps every touch of the two dictionaries
+        // on one thread without dragging the renderer into an actor.
+        URLSession.shared.dataTask(with: url) { data, _, _ in
+            let texture = data.flatMap { Self.centreImageTexture(from: $0, device: device) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.centreImageLoading.remove(url)
+                if let texture { self.centreImageTextures[url] = texture }
+            }
+        }.resume()
+        return nil
+    }
+
+    private static func centreImageTexture(from data: Data, device: MTLDevice) -> MTLTexture? {
+        guard let image = UIImage(data: data)?.cgImage else { return nil }
+        let width = image.width
+        let height = image.height
+        guard width > 0, height > 0 else { return nil }
+        let bytesPerRow = width * 4
+        var pixels = [UInt8](repeating: 0, count: bytesPerRow * height)
+        guard let context = CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: CGColorSpaceCreateDeviceRGB(),
+            // Premultiplied, and BGRA to match the texture format below.
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+                | CGBitmapInfo.byteOrder32Little.rawValue
+        ) else { return nil }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
+        descriptor.usage = .shaderRead
+        guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
+        pixels.withUnsafeBytes { buffer in
+            guard let base = buffer.baseAddress else { return }
+            texture.replace(
+                region: MTLRegionMake2D(0, 0, width, height),
+                mipmapLevel: 0,
+                withBytes: base,
+                bytesPerRow: bytesPerRow)
+        }
+        return texture
     }
 
     private func encodeFullscreenPass(

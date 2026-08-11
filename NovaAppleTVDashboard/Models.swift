@@ -10,6 +10,7 @@ struct DashboardState: Decodable {
     let sun: SunStatus?
     let weather: WeatherStatus?
     let preferences: DashboardPreferences?
+    let climateControl: ClimateControlState?
     let warnings: [String]
 
     var primaryZones: [DashboardZone] {
@@ -287,6 +288,24 @@ struct AirconPreferences: Decodable {
     let fanMode: String?
     let quietMode: Bool?
     let turboMode: Bool?
+}
+
+struct ClimateControlState: Decodable {
+    let lounge: ClimateControlRoomState
+    let bedroom: ClimateControlRoomState
+}
+
+struct ClimateControlRoomState: Decodable {
+    let owner: String
+    let mode: String
+    let phase: String
+    let direction: String?
+    let sensorAvailable: Bool
+    let sensorReportedAt: String?
+    let sensorGraceEndsAt: String?
+    let actuatorAvailable: Bool
+    let overrideReason: String?
+    let lastStopReason: String?
 }
 
 struct WatchfacePreferences: Decodable {

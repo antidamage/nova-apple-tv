@@ -46,11 +46,11 @@ enum ParitySelfTests {
 
         func driver(
             _ type: String, every: Int = 1, offset: Int = 0, interval: Double = 4,
-            cadence: String = "beat", transition: Double = 0.5
+            cadence: String = "beat", divide: Int = 1
         ) -> PhonoscopeDriverSpec {
             PhonoscopeDriverSpec(
-                type: type, every: every, offset: offset, intervalSeconds: interval,
-                cadence: cadence, transitionSeconds: transition)
+                type: type, every: every, offset: offset, divide: divide,
+                intervalSeconds: interval, cadence: cadence)
         }
         func binding(
             _ id: String, _ minimum: Double, _ maximum: Double, _ attack: Double,
@@ -195,16 +195,65 @@ enum ParitySelfTests {
                 })
         }
 
-        // 9. Seeded random, held and glided.
-        for transition in [0.0, 0.25] {
+        // 9. Jittered random timing: one fire per window at a seeded point
+        //    inside it, running the binding envelope.
+        //
+        //    Sixteen ticks across four beats, so each window is sampled either
+        //    side of wherever its own threshold falls.
+        func jitteredFrame(_ tick: Int) -> PhonoscopeSignalFrame {
+            var frame = frameAt(Double(tick) * 0.125, 0.125, tick / 4, tick / 4, 1)
+            let phase = Double(tick % 4) / 4
+            frame.beatPhase = phase
+            frame.barPhase = phase
+            return frame
+        }
+        func jittered(_ cadence: String, _ every: Int, _ divide: Int) {
             sweep(
                 [PhonoscopeScopedLane(
                     groupId: "g",
                     lane: laneOf(
-                        "l", driver("random", cadence: "beat", transition: transition),
-                        [binding("b1", 0, 10, 0.05, 0, 0.6)]))],
-                [:], 8, { frameAt(Double($0) * 0.05, 0.05, $0 / 3, 0, 1) })
+                        "l", driver("random", every: every, cadence: cadence, divide: divide),
+                        [binding("b1", 0, 10, 0, 0, 0)]))],
+                [:], 16, jitteredFrame)
         }
+        jittered("beat", 1, 1)
+        jittered("downbeat", 1, 1)
+        // `every` widens the window rather than skipping windows: one fire per
+        // four bars, at a moving point, not a jittered hit inside the fourth bar.
+        jittered("downbeat", 4, 1)
+        jittered("beat", 1, 4)
+        jittered("timer", 1, 1)
+        // A song has no interior, so this one still fires on the track change.
+        sweep(
+            [PhonoscopeScopedLane(
+                groupId: "g",
+                lane: laneOf(
+                    "l", driver("random", cadence: "song"), [binding("b1", 0, 10, 0, 0, 0)]))],
+            [:], 6, { frameAt(Double($0) * 0.5, 0.5, $0, $0, UInt64(1 + $0 / 2)) })
+        // The envelope is the shape now, so a long release must decay across the
+        // ticks after the fire rather than being ignored as the old glide was.
+        sweep(
+            [PhonoscopeScopedLane(
+                groupId: "g",
+                lane: laneOf(
+                    "l", driver("random", cadence: "beat"), [binding("b1", 0, 10, 0, 0, 1.0)]))],
+            [:], 12, jitteredFrame)
+
+        // 9b. Randomised targets: a new draw on each lane event, held between
+        //     them, and stackable with jittered timing.
+        func randomised(_ value: PhonoscopeDriverSpec, _ ticks: Int) {
+            var bound = binding("b1", 0, 10, 0, 0, 0)
+            bound.randomValue = true
+            sweep(
+                [PhonoscopeScopedLane(groupId: "g", lane: laneOf("l", value, [bound]))],
+                [:], ticks, jitteredFrame)
+        }
+        randomised(driver("beat"), 16)
+        randomised(driver("downbeat", every: 2), 16)
+        // Both halves at once: a random peak at a random moment.
+        randomised(driver("random", cadence: "beat"), 16)
+        // A level driver fires nothing, so the draw happens once and holds.
+        randomised(driver("bass"), 8)
 
         // 10. Several settings groups on one entry: lanes stack, scalars layer.
         var base = PhonoscopeSettingsGroupSpec(id: "base")
@@ -231,16 +280,104 @@ enum ParitySelfTests {
         for value in [
             driver("beat"), driver("beat", every: 2), driver("downbeat"),
             driver("downbeat", every: 4), driver("timer", interval: 30), driver("bass"),
-            driver("random"),
+            // Random fires exactly once per window, so it ranks as its cadence
+            // does — where the old sample-and-hold random ranked at 0 and was
+            // excluded from `strongest` and `common` alike.
+            driver("random"), driver("random", cadence: "downbeat"),
+            driver("random", every: 4, cadence: "downbeat"),
         ] {
             let period = phonoscopeDriverPeriodSeconds(value, frame: rarityFrame)
             mix(period.isInfinite ? -2 : period)
         }
+        mix(phonoscopeDriverPeriodSeconds(
+            driver("random", cadence: "song"), frame: rarityFrame).isInfinite ? 1 : 0)
         mix(phonoscopeDriverPeriodSeconds(driver("song"), frame: rarityFrame).isInfinite ? 1 : 0)
+
+        // 12. Subdivided pulses: the beat cut into quarters and the bar into
+        //     halves, sampled eight times across each whole pulse so both the
+        //     firing ticks and the silent ones between them are covered.
+        func subdivided(_ type: String, _ divide: Int) {
+            sweep(
+                [PhonoscopeScopedLane(
+                    groupId: "g",
+                    lane: laneOf(
+                        "l", driver(type, divide: divide), [binding("b1", 0, 10, 0, 0, 0)]))],
+                [:], 16,
+                { tick in
+                    var frame = frameAt(Double(tick) * 0.05, 0.05, tick / 8, tick / 8, 1)
+                    let phase = Double(tick % 8) / 8
+                    frame.beatPhase = phase
+                    frame.barPhase = phase
+                    return frame
+                })
+        }
+        subdivided("beat", 4)
+        subdivided("beat", 8)
+        subdivided("downbeat", 2)
+        // An unsupported subdivision reads as the whole pulse, which is what
+        // keeps an older engine and a newer configuration agreeing.
+        subdivided("beat", 3)
+
+        // Subdividing makes a lane commoner, and that is what `strongest` ranks by.
+        for value in [
+            driver("beat", divide: 8), driver("beat", divide: 2), driver("beat"),
+            driver("downbeat", divide: 4), driver("downbeat"),
+        ] {
+            mix(phonoscopeDriverPeriodSeconds(value, frame: rarityFrame))
+        }
+
+        // 13. The four combine modes over one pair of lanes: a busy beat and a
+        //     rare every-fourth-downbeat, with deliberately different resting
+        //     values so `override` can be told apart from the rest — it is the
+        //     only mode that replaces the shared floor rather than building on
+        //     it.
+        let layered = [
+            PhonoscopeScopedLane(
+                groupId: "defaults",
+                lane: laneOf("a", driver("beat"), [binding("b-a", 3, 5, 0, 1, 0)])),
+            PhonoscopeScopedLane(
+                groupId: "override",
+                lane: laneOf("b", driver("downbeat", every: 4), [binding("b-b", 1, 2, 0, 1, 0)])),
+        ]
+        for mode: PhonoscopeCombineMode in [.add, .strongest, .common, .override] {
+            sweep(layered, ["glow": mode], 8, { tick in
+                frameAt(Double(tick), 0.05, tick, tick, 1)
+            })
+        }
+
+        // A level lane against a pulse. `common` must not let the continuous one
+        // win — it has no period, so "most frequent" would silence every pulse.
+        let levelled = [
+            PhonoscopeScopedLane(
+                groupId: "g",
+                lane: laneOf("level", driver("energy"), [binding("b-level", 0, 2, 0, 0, 0)])),
+            PhonoscopeScopedLane(
+                groupId: "g",
+                lane: laneOf("pulse", driver("downbeat", every: 4), [binding("b-pulse", 0, 10, 0, 1, 0)])),
+        ]
+        for mode: PhonoscopeCombineMode in [.strongest, .common] {
+            sweep(levelled, ["glow": mode], 8, { tick in
+                var frame = frameAt(Double(tick), 0.05, tick, tick, 1)
+                frame.energy = 1
+                return frame
+            })
+        }
+
+        // The transition axes ignore what the group stored: forced to override,
+        // so an authored `add` cannot sum two modes into a third that means
+        // nothing.
+        for effect in [
+            PhonoscopeEffectID.centreTransition, PhonoscopeEffectID.centreTransitionAxis,
+            PhonoscopeEffectID.centreTransitionDivisions,
+            PhonoscopeEffectID.centreTransitionReturn,
+            "glow", PhonoscopeEffectID.glowBlend,
+        ] {
+            mix(phonoscopeIsOverrideOnlyEffect(effect) ? 1 : 0)
+        }
 
         let produced = String(format: "parameter-drivers:%d:%016llx", samples, hash)
         assert(
-            produced == "parameter-drivers:221:8ae11c3007645e40",
+            produced == "parameter-drivers:485:ced1796f8332b5c1",
             "parameter-driver parity drifted from nova-visualiser: \(produced)"
         )
     }
@@ -577,40 +714,152 @@ enum ParitySelfTests {
         )
     }
 
-    /// Cross-engine parity for the centre slot's image half.
+    /// Cross-engine parity for the centre slot's image half: the contain-fit,
+    /// the ramp that times a change, and the geometry of the three transitions.
     ///
-    /// Like `testSceneBlendParity`, this locks the *formula* both engines
-    /// intend rather than the code either runs: the streamed renderer fits and
-    /// scales through a uniform handed to `centre_image.frag`, while this one
-    /// composes `.scaledToFit()` with `.scaleEffect()` in SwiftUI. They agree on
-    /// what a contain-fit at a given scale means, which is the thing that can
-    /// silently drift; they differ in who does the arithmetic.
+    /// Both engines now run this identically — the streamed renderer through
+    /// `centre_image.frag` and this one through `phonoscope_centre_image` in
+    /// PhonoscopeShader.metal, off the same uniforms. A flip or a slide is a
+    /// per-fragment transform, so the SwiftUI approximation this used to lock
+    /// against is gone; what is left to lock is the arithmetic itself, which is
+    /// the thing that can silently drift.
     ///
     /// Evaluates the same grid as `runCentreImageCase()` in
     /// `nova-visualiser/src/tools/conformance.cpp` and must produce the same
     /// digest as `tests/conformance/centre-image/expected.json`.
     private static func testCentreImageParity() {
-        // Mirrors nova::centreImageHalfExtent. The clamp is shared with the
-        // message: the centre slot is scaled, not whatever is in it.
-        // Two independent inputs: `heightFraction` is how tall the image is as
-        // a share of the frame, `scale` is the driven multiplier on top. Height
-        // is authored and width follows from the source's proportions, so the
-        // picture is never distorted. Mirrors nova::centreImageHalfExtent.
+        // Mirrors nova::imageHalfExtent, which sizes BOTH slots: the centre
+        // image and the background image share one control set, and the scale
+        // clamp is shared with the message because the slot is scaled, not
+        // whatever is in it.
+        //
+        // `fit` decides where the base size comes from — manual reads the width
+        // and height, fit and fill derive both from the image and ignore them —
+        // and `proportional` makes the height follow the width under a manual
+        // fit. The scale multiplies in every mode.
+        //
+        // Float32 throughout, like every other mirror in this file: the digest
+        // quantises to four decimal places and Double would drift at the
+        // boundaries. `phonoscopeImageHalfExtent` in PhonoscopeModels.swift is
+        // the Double-typed production copy; this is the one that has to match
+        // C++ bit for bit.
         func halfExtent(
-            frameAspect: Float, imageAspect: Float, heightFraction: Float, scale: Float
+            frameAspect: Float, imageAspect: Float, widthFraction: Float,
+            heightFraction: Float, scale: Float, fit: Int, proportional: Bool
         ) -> (Float, Float) {
-            let clampedScale = min(max(scale, 0.1), 5)
-            let clampedHeight = min(max(heightFraction, 0), 1)
             guard frameAspect > 0, imageAspect > 0 else { return (0, 0) }
-            let halfHeight = 0.5 * clampedHeight * clampedScale
-            return (halfHeight * (imageAspect / frameAspect), halfHeight)
+            let clampedScale = min(max(scale, 0.1), 5)
+            let heightPerWidth = frameAspect / imageAspect
+            if fit == 0 {
+                let halfWidth = 0.5 * max(0, widthFraction) * clampedScale
+                let halfHeight = proportional
+                    ? halfWidth * heightPerWidth
+                    : 0.5 * max(0, heightFraction) * clampedScale
+                return (halfWidth, halfHeight)
+            }
+            let heightWhenWidthFills = 0.5 * heightPerWidth
+            let halfHeight = fit == 1
+                ? min(0.5, heightWhenWidthFills)
+                : max(0.5, heightWhenWidthFills)
+            let scaled = halfHeight * clampedScale
+            return (scaled / heightPerWidth, scaled)
         }
 
-        // Mirrors nova::centreImageFade. Linear, so it actually reaches 1 and
-        // the outgoing image can be released — unlike the palette's chase.
+        // Mirrors nova::imageFitFor. Where 0.5 and 1.5 fall is part of the
+        // contract: a stored binding holds a number on this axis.
+        func fitFor(_ value: Double) -> Int {
+            if value >= 1.5 { return 2 }
+            if value >= 0.5 { return 1 }
+            return 0
+        }
+
+        // Mirrors nova::transitionRamp: the ramp control read as a motion
+        // profile, where attack eases in, hold is the flat constant-velocity
+        // middle and release eases out, so a transition lasts their sum. Peak
+        // velocity is whatever makes the area exactly 1, which is what stops a
+        // long ease-in from overshooting the end.
+        //
+        // Float32 throughout, like every other mirror in this file: the digest
+        // quantises to four decimal places and Double would drift at the
+        // boundaries. `PhonoscopeCentreTransition.swift` is the Double-typed
+        // production copy; this is the one that has to match C++ bit for bit.
+        func ramp(elapsed: Float, attack: Float, hold: Float, release: Float) -> Float {
+            let attack = max(0, attack)
+            let hold = max(0, hold)
+            let release = max(0, release)
+            let total = attack + hold + release
+            let elapsed = max(0, elapsed)
+            guard total > 0, elapsed < total else { return 1 }
+            let peak = 1 / (attack * 0.5 + hold + release * 0.5)
+            if elapsed < attack {
+                return min(max(peak * elapsed * elapsed / (2 * attack), 0), 1)
+            }
+            if elapsed < attack + hold {
+                return min(max(peak * (attack * 0.5 + (elapsed - attack)), 0), 1)
+            }
+            let decelerating = elapsed - attack - hold
+            return min(max(peak * (attack * 0.5 + hold + decelerating
+                                   - decelerating * decelerating / (2 * release)), 0), 1)
+        }
+
+        // Mirrors nova::centreImageFade: a caller with nothing but a total
+        // duration spends all of it easing out, which is what a bare release
+        // means and what every configuration written before the ramp meant this
+        // already had.
         func fade(elapsed: Float, transition: Float) -> Float {
-            guard transition > 0 else { return 1 }
-            return min(max(elapsed / transition, 0), 1)
+            ramp(elapsed: elapsed, attack: 0, hold: 0, release: transition)
+        }
+
+        // Mirrors nova::centreSlideClearDistance — the smallest offset that
+        // fully clears the frame at a given angle.
+        func clearDistance(
+            axisRadians: Float, frameAspect: Float, halfWidth: Float, halfHeight: Float
+        ) -> Float {
+            let along = abs(cos(axisRadians))
+            let across = abs(sin(axisRadians))
+            let frameSpan = 0.5 * (along * max(0, frameAspect) + across)
+            let imageSpan = along * abs(halfWidth) * max(0, frameAspect) + across * abs(halfHeight)
+            return frameSpan + imageSpan
+        }
+
+        // Mirrors nova::centreSlideSegment. Indexed on the perpendicular
+        // coordinate, which displacement never changes.
+        func segment(across: Float, halfAcross: Float, divisions: Int) -> Int {
+            let segments = max(1, min(10, divisions) + 1)
+            guard halfAcross > 0 else { return 0 }
+            let position = (across / halfAcross) * 0.5 + 0.5
+            return max(0, min(segments - 1, Int(floor(position * Float(segments)))))
+        }
+
+        // Mirrors nova::centreSlideDirection: alternating by parity.
+        func direction(segment: Int) -> Float { segment % 2 == 0 ? 1 : -1 }
+
+        // Mirrors nova::centreSlideOffset. Two legs of one movement, each
+        // linear in progress; the ramp supplies all the acceleration.
+        func slideOffset(
+            progress: Float, incoming: Bool, direction: Float,
+            clearDistance: Float, returnFromOrigin: Bool
+        ) -> Float {
+            let clamped = min(max(progress, 0), 1)
+            if !incoming { return direction * clearDistance * (clamped * 2) }
+            let arriving = clamped * 2 - 1
+            let travel = returnFromOrigin ? -direction : direction
+            return travel * clearDistance * (arriving - 1)
+        }
+
+        // Mirrors nova::centreFlipScale and nova::centreFlipShowsIncoming: the
+        // collapse along the axis, and the exact-midpoint swap that makes a flip
+        // read as one object turning over.
+        func flipScale(progress: Float) -> Float {
+            abs(cos(Float.pi * min(max(progress, 0), 1)))
+        }
+        func flipShowsIncoming(progress: Float) -> Bool { progress >= 0.5 }
+
+        // Mirrors nova::centreTransitionFor: 0 cross-fade, 1 flip, 2 slide.
+        func transitionFor(_ value: Float) -> Int {
+            if value >= 1.5 { return 2 }
+            if value >= 0.5 { return 1 }
+            return 0
         }
 
         var hash: UInt64 = 1_469_598_103_934_665_603
@@ -626,21 +875,37 @@ enum ParitySelfTests {
         let imageAspects: [Float] = [0.5, 1, 16.0 / 9.0, 2.5, 4]
         let scales: [Float] = [0, 0.1, 0.5, 1, 2.75, 5, 9]
         let heights: [Float] = [0, 0.33, 1, 1.5]
+        let widths: [Float] = [0, 0.33, 1, 1.5]
+        // Every mode against every flag, in exactly the C++ case's loop order —
+        // the digest is order-sensitive, so the nesting IS part of the contract.
+        let fits = [0, 1, 2]
 
         var samples = 0
         for frameAspect in frameAspects {
             for imageAspect in imageAspects {
-                for height in heights {
-                    for scale in scales {
-                        let extent = halfExtent(
-                            frameAspect: frameAspect, imageAspect: imageAspect,
-                            heightFraction: height, scale: scale)
-                        mix(extent.0)
-                        mix(extent.1)
-                        samples += 1
+                for width in widths {
+                    for height in heights {
+                        for scale in scales {
+                            for fit in fits {
+                                for proportional in [false, true] {
+                                    let extent = halfExtent(
+                                        frameAspect: frameAspect, imageAspect: imageAspect,
+                                        widthFraction: width, heightFraction: height,
+                                        scale: scale, fit: fit, proportional: proportional)
+                                    mix(extent.0)
+                                    mix(extent.1)
+                                    samples += 1
+                                }
+                            }
+                        }
                     }
                 }
             }
+        }
+
+        for value in [-1.0, 0.0, 0.49, 0.5, 1.0, 1.49, 1.5, 2.0, 7.0] {
+            mix(Float(fitFor(value)))
+            samples += 1
         }
 
         let transitions: [Float] = [0, 0.6, 2.5]
@@ -652,9 +917,70 @@ enum ParitySelfTests {
             }
         }
 
+        // The ramp as a motion profile, over every degenerate shape as well as
+        // the balanced one: an instant cut, a bare release (pure ease-out), a
+        // bare attack (everything deferred to the end), and symmetric profiles
+        // whose midpoint must land on exactly 0.5.
+        let ramps: [(Float, Float, Float)] = [
+            (0, 0, 0), (0, 0, 0.6), (0.6, 0, 0), (0.05, 0, 0.6),
+            (0.5, 1, 0.5), (1, 0, 1), (0.25, 0.5, 1.25),
+        ]
+        let rampElapsed: [Float] = [0, 0.05, 0.25, 0.5, 1, 1.5, 2, 3]
+        for phases in ramps {
+            for seconds in rampElapsed {
+                mix(ramp(elapsed: seconds, attack: phases.0, hold: phases.1, release: phases.2))
+                samples += 1
+            }
+        }
+
+        // Transition geometry. The axis sweep covers both cardinals, both
+        // diagonals and a value just short of the wrap, because the segment
+        // parity and the clear distance both change character across them.
+        let axes: [Float] = [0, 45, 90, 200, 359]
+        let divisionCounts = [0, 1, 2, 7, 10]
+        let progressPoints: [Float] = [0, 0.25, 0.49, 0.5, 0.51, 0.75, 1]
+        for degrees in axes {
+            let radians = degrees * Float.pi / 180
+            for frameAspect in frameAspects {
+                mix(clearDistance(
+                    axisRadians: radians, frameAspect: frameAspect,
+                    halfWidth: 0.3, halfHeight: 0.165))
+                samples += 1
+            }
+            for cuts in divisionCounts {
+                // Sampled across the perpendicular extent, so every segment
+                // boundary — including both outer edges, where the clamp is
+                // what stops an off-by-one from landing outside the list.
+                for step in 0 ... 8 {
+                    let across = -0.4 + 0.1 * Float(step)
+                    let index = segment(across: across, halfAcross: 0.4, divisions: cuts)
+                    mix(Float(index))
+                    mix(direction(segment: index))
+                    samples += 1
+                }
+                for fraction in progressPoints {
+                    let travel = direction(segment: cuts % 2)
+                    for incoming in [false, true] {
+                        for origin in [false, true] {
+                            mix(slideOffset(
+                                progress: fraction, incoming: incoming, direction: travel,
+                                clearDistance: 0.75, returnFromOrigin: origin))
+                            samples += 1
+                        }
+                    }
+                }
+            }
+        }
+        for fraction in progressPoints {
+            mix(flipScale(progress: fraction))
+            mix(flipShowsIncoming(progress: fraction) ? 1 : 0)
+            mix(Float(transitionFor(fraction * 2)))
+            samples += 1
+        }
+
         let produced = String(format: "centre-image:%d:%016llx", samples, hash)
         assert(
-            produced == "centre-image:295:6338bc9de7992673",
+            produced == "centre-image:7742:4552642f8fcba8e1",
             "centre image parity drifted from nova-visualiser: \(produced)"
         )
     }

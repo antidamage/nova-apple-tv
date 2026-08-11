@@ -35,6 +35,7 @@
 		01A1B0400000000000000001 /* PhonoscopeStreamClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0400000000000000001 /* PhonoscopeStreamClient.swift */; };
 		01A1B0350000000000000001 /* PhonoscopeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0350000000000000001 /* PhonoscopeStore.swift */; };
 		01A1B0420000000000000001 /* PhonoscopeDrivers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0420000000000000001 /* PhonoscopeDrivers.swift */; };
+		01A1B0430000000000000001 /* PhonoscopeCentreTransition.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0430000000000000001 /* PhonoscopeCentreTransition.swift */; };
 		01A1B0360000000000000001 /* PhonoscopeSimulation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0360000000000000001 /* PhonoscopeSimulation.swift */; };
 		01A1B0370000000000000001 /* MetalPhonoscopeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0370000000000000001 /* MetalPhonoscopeView.swift */; };
 		01A1B0380000000000000001 /* PhonoscopeShader.metal in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0380000000000000001 /* PhonoscopeShader.metal */; };
@@ -78,6 +79,7 @@
 		01A1A0400000000000000001 /* PhonoscopeStreamClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonoscopeStreamClient.swift; sourceTree = "<group>"; };
 		01A1A0350000000000000001 /* PhonoscopeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonoscopeStore.swift; sourceTree = "<group>"; };
 		01A1A0420000000000000001 /* PhonoscopeDrivers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonoscopeDrivers.swift; sourceTree = "<group>"; };
+		01A1A0430000000000000001 /* PhonoscopeCentreTransition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonoscopeCentreTransition.swift; sourceTree = "<group>"; };
 		01A1A0360000000000000001 /* PhonoscopeSimulation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonoscopeSimulation.swift; sourceTree = "<group>"; };
 		01A1A0370000000000000001 /* MetalPhonoscopeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalPhonoscopeView.swift; sourceTree = "<group>"; };
 		01A1A0380000000000000001 /* PhonoscopeShader.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = PhonoscopeShader.metal; sourceTree = "<group>"; };
@@ -135,6 +137,7 @@
 				01A1A0400000000000000001 /* PhonoscopeStreamClient.swift */,
 				01A1A0350000000000000001 /* PhonoscopeStore.swift */,
 				01A1A0420000000000000001 /* PhonoscopeDrivers.swift */,
+				01A1A0430000000000000001 /* PhonoscopeCentreTransition.swift */,
 				01A1A0360000000000000001 /* PhonoscopeSimulation.swift */,
 				01A1A0370000000000000001 /* MetalPhonoscopeView.swift */,
 				01A1A0380000000000000001 /* PhonoscopeShader.metal */,
@@ -270,6 +273,7 @@
 				01A1B0400000000000000001 /* PhonoscopeStreamClient.swift in Sources */,
 				01A1B0350000000000000001 /* PhonoscopeStore.swift in Sources */,
 				01A1B0420000000000000001 /* PhonoscopeDrivers.swift in Sources */,
+				01A1B0430000000000000001 /* PhonoscopeCentreTransition.swift in Sources */,
 				01A1B0360000000000000001 /* PhonoscopeSimulation.swift in Sources */,
 				01A1B0370000000000000001 /* MetalPhonoscopeView.swift in Sources */,
 				01A1B0380000000000000001 /* PhonoscopeShader.metal in Sources */,

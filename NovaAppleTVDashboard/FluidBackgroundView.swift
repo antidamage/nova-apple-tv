@@ -23,6 +23,22 @@ struct FluidBackgroundBand: Equatable {
     var vignetteColor: SIMD4<Float>
     var vignetteOpacity: Float
     var vignetteSize: Float
+    /// The colour theme's background image, if it names one, and the one still
+    /// leaving during a change. Nil in both is the procedural field: the two are
+    /// one slot with two possible occupants, not a picture over a field.
+    var imageTo: URL?
+    var imageFrom: URL?
+    /// How the image is fitted. The extent itself is resolved in the renderer,
+    /// where the decoded texture's own proportions are known, by the same
+    /// `phonoscopeImageHalfExtent` the centre slot uses — the two are one
+    /// control set, and the conformance corpus locks the arithmetic.
+    var imageScale: Float = 1
+    var imageFit: PhonoscopeImageFit = .manual
+    var imageProportional: Bool = true
+    /// How far through a change, 0 to 1, already shaped by the authored ramp,
+    /// and the transition latched when it started.
+    var imageProgress: Float = 1
+    var imageParams = PhonoscopeCentreTransitionParams()
 
     /// No band: the whole drawable is field, unclipped and unvignetted.
     static let none = FluidBackgroundBand(
@@ -181,6 +197,22 @@ struct FluidBackgroundUniforms {
     /// 1 when this surface is banded. A height of zero is a band closed to
     /// nothing, not the absence of one, so the flag cannot be inferred.
     var bandEnabled: Float = 0
+    // The background image. Scalars rather than SIMD2s for the reason stated on
+    // the Metal side: a float2's 8-byte alignment would make both sides depend
+    // on padding they insert only by agreement, and a silent mismatch here
+    // reads the transition out of the wrong words.
+    var hasImage: Float = 0
+    var hasImageFrom: Float = 0
+    var imageHalfExtentToX: Float = 0
+    var imageHalfExtentToY: Float = 0
+    var imageHalfExtentFromX: Float = 0
+    var imageHalfExtentFromY: Float = 0
+    var imageProgress: Float = 1
+    var imageAxisRadians: Float = 0
+    var imageSegments: Float = 1
+    var imageReturnOrigin: Float = 0
+    var imageMode: Float = 0
+    var frameAspect: Float = 0
     var padding: Float = 0
 }
 
@@ -210,6 +242,14 @@ final class FluidBackgroundRenderer: NSObject, MTKViewDelegate {
     var band: FluidBackgroundBand = .none
 
     private var mosaicTexture: MTLTexture?
+    /// The background image's two planes, keyed by the URL each was loaded
+    /// from. Keyed rather than reloaded per frame: a transition holds two images
+    /// for its whole run, and re-decoding a 4K photograph every frame would cost
+    /// more than the rest of the pass put together.
+    private var backgroundImageTo: MTLTexture?
+    private var backgroundImageFrom: MTLTexture?
+    private var loadedBackgroundKeys: [String: MTLTexture] = [:]
+    private var backgroundLoadGeneration = 0
     private var loadedTextureKey: String?
     private var textureLoadGeneration = 0
 
@@ -252,6 +292,7 @@ final class FluidBackgroundRenderer: NSObject, MTKViewDelegate {
 
     func draw(in view: MTKView) {
         updateMosaicTextureIfNeeded()
+        updateBackgroundImagesIfNeeded()
         advancePhase()
 
         guard let drawable = view.currentDrawable,
@@ -274,6 +315,11 @@ final class FluidBackgroundRenderer: NSObject, MTKViewDelegate {
             Float(view.drawableSize.width) * (band.isEnabled ? max(band.widthFraction, 0.0001) : 1),
             Float(view.drawableSize.height) * (band.isEnabled ? max(band.heightFraction, 0.0001) : 1)
         )
+        // The frame's aspect, not the band's: with a background image there is
+        // no band, and the fit is stated against the whole picture.
+        let frameAspect = view.drawableSize.height > 0
+            ? Float(view.drawableSize.width / view.drawableSize.height)
+            : 0
         var uniforms = FluidBackgroundUniforms(
             time: Float(phase),
             resolution: bandPixels,
@@ -295,12 +341,30 @@ final class FluidBackgroundRenderer: NSObject, MTKViewDelegate {
             vignetteColor: band.vignetteColor,
             vignetteOpacity: band.vignetteOpacity,
             vignetteSize: band.vignetteSize,
-            bandEnabled: band.isEnabled ? 1 : 0
+            bandEnabled: band.isEnabled ? 1 : 0,
+            hasImage: backgroundImageTo == nil ? 0 : 1,
+            hasImageFrom: backgroundImageFrom == nil ? 0 : 1,
+            imageHalfExtentToX: backgroundExtent(backgroundImageTo, frameAspect: frameAspect).x,
+            imageHalfExtentToY: backgroundExtent(backgroundImageTo, frameAspect: frameAspect).y,
+            imageHalfExtentFromX: backgroundExtent(backgroundImageFrom, frameAspect: frameAspect).x,
+            imageHalfExtentFromY: backgroundExtent(backgroundImageFrom, frameAspect: frameAspect).y,
+            imageProgress: band.imageProgress,
+            imageAxisRadians: Float(band.imageParams.axisRadians),
+            // Divisions become segments here so the shader never has to add one
+            // on the hot path, exactly as the streamed renderer does.
+            imageSegments: Float(max(1, min(10, band.imageParams.divisions) + 1)),
+            imageReturnOrigin: band.imageParams.returnFromOrigin ? 1 : 0,
+            imageMode: Float(band.imageParams.mode.rawValue),
+            frameAspect: frameAspect
         )
 
         encoder.setRenderPipelineState(pipelineState)
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<FluidBackgroundUniforms>.stride, index: 0)
         encoder.setFragmentTexture(mosaicTexture, index: 0)
+        // Bound whatever happens: a fragment sampler left pointing at nothing is
+        // undefined, and `hasImage` is what actually decides the branch.
+        encoder.setFragmentTexture(backgroundImageTo ?? mosaicTexture, index: 1)
+        encoder.setFragmentTexture(backgroundImageFrom ?? backgroundImageTo ?? mosaicTexture, index: 2)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         encoder.endEncoding()
 
@@ -341,6 +405,68 @@ final class FluidBackgroundRenderer: NSObject, MTKViewDelegate {
                 self.mosaicTexture = texture
             }
         }.resume()
+    }
+
+    /// One plane's fitted rectangle, from the decoded texture's own proportions.
+    ///
+    /// Resolved here rather than in the shader so the conformance corpus can
+    /// lock it, and by the same function the centre slot uses — the two slots
+    /// are one control set.
+    private func backgroundExtent(_ texture: MTLTexture?, frameAspect: Float) -> SIMD2<Float> {
+        guard let texture, texture.height > 0 else { return .zero }
+        return phonoscopeImageHalfExtentSIMD(
+            frameAspect: Double(frameAspect),
+            imageAspect: Double(texture.width) / Double(texture.height),
+            widthFraction: Double(band.widthFraction),
+            heightFraction: Double(band.heightFraction),
+            scale: Double(band.imageScale),
+            fit: band.imageFit,
+            proportional: band.imageProportional)
+    }
+
+    /// Loads the colour theme's background image, and the one still leaving.
+    ///
+    /// Separate from the mosaic loader above because the lifetimes differ: the
+    /// mosaic belongs to the appearance theme and changes rarely, while these
+    /// two change with the rotation and are held in pairs for the length of a
+    /// transition. The cache is keyed by URL and pruned to the two that are
+    /// live, so moving between entries that name the same image costs nothing
+    /// and a long playlist cannot accumulate decoded 4K frames.
+    private func updateBackgroundImagesIfNeeded() {
+        let wanted = [band.imageTo, band.imageFrom].compactMap { $0?.absoluteString }
+        backgroundImageTo = band.imageTo.flatMap { loadedBackgroundKeys[$0.absoluteString] }
+        backgroundImageFrom = band.imageFrom.flatMap { loadedBackgroundKeys[$0.absoluteString] }
+
+        // Anything neither plane names is no longer reachable: a transition that
+        // finished released its outgoing image, and holding the texture past
+        // that is a leak that grows with the playlist.
+        loadedBackgroundKeys = loadedBackgroundKeys.filter { wanted.contains($0.key) }
+
+        for url in [band.imageTo, band.imageFrom].compactMap({ $0 }) {
+            let key = url.absoluteString
+            guard loadedBackgroundKeys[key] == nil else { continue }
+            // Claimed immediately so a slow fetch cannot be started again on
+            // every frame until it lands.
+            backgroundLoadGeneration += 1
+            let generation = backgroundLoadGeneration
+            let loader = textureLoader
+            URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+                guard let self, let data else { return }
+                // Premultiplied at decode, matching the streamed renderer: the
+                // shader's cross-fade is a weighted sum of premultiplied values
+                // and would show the outgoing image through the incoming one's
+                // transparent parts otherwise.
+                let texture = try? loader.newTexture(
+                    data: data,
+                    options: [.SRGB: NSNumber(value: false),
+                              .generateMipmaps: NSNumber(value: false)]
+                )
+                DispatchQueue.main.async {
+                    guard let texture, generation <= self.backgroundLoadGeneration else { return }
+                    self.loadedBackgroundKeys[key] = texture
+                }
+            }.resume()
+        }
     }
 
     private func resolvedTextureURL(_ value: String) -> URL? {
