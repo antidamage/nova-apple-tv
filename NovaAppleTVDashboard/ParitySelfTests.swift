@@ -10,6 +10,7 @@ enum ParitySelfTests {
         testClockFormatting()
         testThemeDecoding()
         testOrbContract()
+        testOrbInfoFormatConformance()
         testSpeechEnvelope()
         testPhonoscopeQualityPolicy()
         testFluidBackgroundPolicy()
@@ -1186,6 +1187,58 @@ enum ParitySelfTests {
             produced == "glow-overlay:892:946bad8d3da026b4",
             "glow-overlay parity drifted from nova-visualiser: \(produced)"
         )
+    }
+
+    /// Runs the SAME conformance table as the web dashboard's
+    /// `lib/orb-info/format.test.ts`. A failure here means the status orb would
+    /// read one way on the dashboard and another on the Apple TV.
+    private static func testOrbInfoFormatConformance() {
+        struct CaseFile: Decodable {
+            struct Entry: Decodable {
+                let name: String
+                let output: OutputPayload
+                let display: OrbInfoDisplayPayload
+                let expectText: String
+                let expectAlert: Bool
+            }
+            struct OutputPayload: Decodable {
+                let value: Double?
+                let text: String?
+                let baseUnit: String?
+                let status: String?
+                let alert: Bool?
+                let alertThreshold: Double?
+            }
+            let cases: [Entry]
+        }
+
+        guard let data = OrbInfoConformanceCases.json.data(using: .utf8),
+              let file = try? JSONDecoder().decode(CaseFile.self, from: data) else {
+            assertionFailure("orb info conformance table failed to decode")
+            return
+        }
+        assert(!file.cases.isEmpty)
+
+        for entry in file.cases {
+            let output = OrbModuleOutput(
+                value: entry.output.value,
+                text: entry.output.text,
+                baseUnit: entry.output.baseUnit.flatMap(OrbBaseUnit.init(rawValue:)) ?? .none,
+                status: entry.output.status.flatMap(OrbModuleOutput.Status.init(rawValue:)) ?? .unavailable,
+                alert: entry.output.alert ?? false,
+                alertThreshold: entry.output.alertThreshold
+            )
+            let display = entry.display.resolved(onto: .default)
+            let result = formatOrbValue(output, display, label: "Test")
+            assert(
+                result.text == entry.expectText,
+                "orb info case '\(entry.name)': expected '\(entry.expectText)', got '\(result.text)'"
+            )
+            assert(
+                result.alert == entry.expectAlert,
+                "orb info case '\(entry.name)': expected alert \(entry.expectAlert), got \(result.alert)"
+            )
+        }
     }
 
     private static func testClockFormatting() {

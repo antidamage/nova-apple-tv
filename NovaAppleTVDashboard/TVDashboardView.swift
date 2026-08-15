@@ -67,8 +67,24 @@ struct TVDashboardView: View {
                     NovaAvatarOrb(
                         load: activity.load?.load ?? 0,
                         listening: activity.load?.listening == true,
+                        // The whole sample, not just the composite: the host
+                        // readout modules break it down into CPU/GPU/network.
+                        novaLoad: activity.load,
+                        power: activity.power,
+                        tasks: activity.tasks,
                         watchface: store.state?.preferences?.watchface
                     )
+                    // Fetch the power/reminder feeds only while a readout that
+                    // needs them is selected, so this client polls no more than
+                    // the web dashboard does for the same setting.
+                    .onChange(of: store.state?.preferences?.orbInfo?.moduleID ?? "") { _, _ in
+                        activity.extraFeeds = OrbInfoCatalogue
+                            .resolve(store.state?.preferences?.orbInfo).module.extraSources
+                    }
+                    .onAppear {
+                        activity.extraFeeds = OrbInfoCatalogue
+                            .resolve(store.state?.preferences?.orbInfo).module.extraSources
+                    }
                     .frame(width: bandHeight * 0.6, height: bandHeight * 0.6)
                     .zIndex(speech.phase == .idle ? 0 : 4_000)
 

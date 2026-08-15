@@ -70,7 +70,7 @@ Two `@MainActor` observable stores are created once by the app entry point
 | Store | Responsibility | Poll cadence |
 |---|---|---|
 | `DashboardStore` | dashboard state, theme, layout, orb-module catalog, all command sends, active host, full-screen camera id | `/api/state` every **5s**, `/api/theme` after each state fetch, `/api/orb-modules` every **5 min** |
-| `NovaActivityStore` | the `/api/nova-load` signal that animates the orb | every **2s** |
+| `NovaActivityStore` | the `/api/nova-load` signal that animates the orb, plus the `/api/power` and `/api/tasks` feeds the status orb readouts need | load every **2s**; the extra feeds every **30s**, and only while a readout that needs them is selected |
 
 Each store runs its polling loops in detached `Task`s started from `.task` on the
 root view. Polling is best-effort: a failed cosmetic fetch (theme, orb modules,
@@ -111,7 +111,10 @@ each surface can be read in isolation; reusable chrome is centralized.
 | `LightingControlsView.swift` | Home→room ribbon, per-zone preset+brightness panel, vertical brightness slider. |
 | `ClimateControlsView.swift` | Air conditioner + panel heater surfaces and all climate command logic. |
 | `OutsideView.swift` | Outside zone (light toggle, camera tile, weather) + the passive weather/network status panels. |
-| `NovaAvatarOrb.swift` | The orb view (surface, load shaping, gym overlay, speaking migration) — delegates drawing to Metal. |
+| `NovaAvatarOrb.swift` | The orb view (surface, load shaping, readout overlay, speaking migration) — delegates drawing to Metal. |
+| `OrbInfo.swift` | Status orb **info module** contract + `formatOrbValue` — a port of the dashboard's `lib/orb-info/`. |
+| `OrbInfoModules.swift` | The tvOS module catalogue (gym, host load, clock, sky, household) and display resolution. |
+| `OrbInfoConformanceCases.swift` | GENERATED. The shared formatter case table; regenerate via `scripts/generate-orb-info-cases.mjs`. |
 | `OrbModules.swift` | Status-orb module **model** (decoding, settings, layers, geometry), validation, palette, and animation state. |
 | `OrbBuiltins.swift` | The embedded built-in module JSON + `OrbModuleCatalog` (offline catalog + fallback rule). |
 | `MetalOrbView.swift` | Native Metal status-orb renderer and module-command encoder. |
@@ -141,6 +144,8 @@ All paths are relative to a host base URL.
 | GET | `/api/theme` | Shared theme payload (variants + top-level `layout`). |
 | GET | `/api/orb-modules` | Status-orb module catalog (merged host built-ins + dropped modules). |
 | GET | `/api/nova-load` | Activity signal (cpu/net/gpu/load + listening flag). |
+| GET | `/api/power` | Live household watts + cost rate, for the power status orb readouts. |
+| GET | `/api/tasks?command=list` | Reminder list, for the next-reminder / overdue readouts. |
 | GET | `/api/camera/<id>/index.m3u8` | Rolling-window HLS playlist for a camera. |
 | GET | `/api/camera/<id>/status` | Camera source/recording/connection state. |
 | POST | `/api/zone` | Group/zone lighting action (on/off/brightness/color/candlelight/white). |
@@ -485,7 +490,7 @@ Speech events use the same pulse path. `VoiceSpeechStore` listens to
 `/api/events`, reconstructs the server's audible start time and consonant timing,
 then supplies the same envelope used by the dashboards. While speaking, the orb
 migrates to the screen centre, enlarges with a higher-resolution drawable, hides
-the gym counter, and returns after the end event.
+the readout, and returns after the end event.
 
 ---
 
@@ -572,7 +577,7 @@ A Metal-rendered animated field that mirrors the web dashboard's background.
 ## 15. Accessibility
 
 - Interactive controls carry `.isButton`; the orb and camera expose descriptive
-  labels (gym hours, camera live/offline).
+  labels (the status orb readout, camera live/offline).
 - Passive panels are focusable for navigation but are not labelled as buttons.
 
 ---
