@@ -1023,9 +1023,20 @@ struct DashboardTheme: Equatable {
 @MainActor
 final class NovaActivityStore: ObservableObject {
     @Published var load: NovaLoad?
+    @Published var power: PowerSnapshot?
+    @Published var tasks: [TaskSummary]?
+
+    /// Which extra feeds the currently selected status orb readout needs. The
+    /// web client subscribes only to its module's declared sources and this
+    /// keeps that property here: a client showing the clock must not be
+    /// fetching power and reminders it will never display.
+    @Published var extraFeeds: Set<OrbSourceID> = [] {
+        didSet { if extraFeeds != oldValue { startExtraFeeds() } }
+    }
 
     private let decoder = JSONDecoder()
     private var pollingTask: Task<Void, Never>?
+    private var extraTask: Task<Void, Never>?
 
     func start() {
         guard pollingTask == nil else { return }
@@ -1046,6 +1057,46 @@ final class NovaActivityStore: ObservableObject {
             load = try decoder.decode(NovaLoad.self, from: data)
         } catch {
             load = nil
+        }
+    }
+
+    /// These change far more slowly than the 2s load signal, and neither drives
+    /// an animation, so they poll on their own relaxed cadence.
+    private func startExtraFeeds() {
+        extraTask?.cancel()
+        let feeds = extraFeeds
+        guard !feeds.isEmpty else {
+            extraTask = nil
+            power = nil
+            tasks = nil
+            return
+        }
+        extraTask = Task { [weak self] in
+            while !Task.isCancelled {
+                if feeds.contains(.power) { await self?.refreshPower() }
+                if feeds.contains(.tasks) { await self?.refreshTasks() }
+                try? await Task.sleep(for: .seconds(30))
+            }
+        }
+    }
+
+    private func refreshPower() async {
+        do {
+            let (data, response) = try await get(path: "api/power")
+            guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else { return }
+            power = try decoder.decode(PowerSnapshot.self, from: data)
+        } catch {
+            power = nil
+        }
+    }
+
+    private func refreshTasks() async {
+        do {
+            let (data, response) = try await get(path: "api/tasks?command=list")
+            guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else { return }
+            tasks = try decoder.decode(TaskListPayload.self, from: data).tasks
+        } catch {
+            tasks = nil
         }
     }
 

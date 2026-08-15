@@ -2,23 +2,49 @@ import SwiftUI
 import UIKit
 
 // The status orb at the top-left of the band. This view owns only the drawing
-// surface, the load shaping, and the gym-counter overlay; the entire draw stack
+// surface, the load shaping, and the readout overlay; the entire draw stack
 // is delegated to the theme-named status orb module (see OrbModules.swift),
 // which interprets a declarative JSON document shared with the web dashboard.
+//
+// The readout itself is a selectable status orb info module (OrbInfo.swift) —
+// gym hours, host load, the clock, the weather — configured on the dashboard
+// and carried to this client on the shared state payload. This view renders
+// whatever the selected module's display formats it into.
 
 struct NovaAvatarOrb: View {
     @EnvironmentObject private var store: DashboardStore
     @EnvironmentObject private var speech: VoiceSpeechStore
     let load: Double
     let listening: Bool
+    let novaLoad: NovaLoad?
+    let power: PowerSnapshot?
+    let tasks: [TaskSummary]?
     let watchface: WatchfacePreferences?
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 30)) { timeline in
+        let resolved = OrbInfoCatalogue.resolve(store.state?.preferences?.orbInfo)
+        // A clock showing seconds has to tick every second; everything else is
+        // comfortable on the original 30s cadence.
+        let cadence: TimeInterval = resolved.display.clockSeconds ? 1 : 30
+
+        return TimelineView(.periodic(from: .now, by: cadence)) { timeline in
             GeometryReader { geometry in
                 let theme = store.theme
-                let gymHours = gymHoursSinceReset(watchface?.gymLastResetAt, now: timeline.date)
-                let gymAlert = Double(gymHours ?? 0) >= theme.avatar.gymAlertThresholdHours
+                let sources = OrbInfoSources(
+                    now: timeline.date,
+                    watchface: watchface,
+                    gymAlertThresholdHours: theme.avatar.gymAlertThresholdHours,
+                    novaLoad: novaLoad,
+                    state: store.state,
+                    power: power,
+                    tasks: tasks
+                )
+                let readout = formatOrbValue(
+                    resolved.module.read(sources, resolved.params),
+                    resolved.display,
+                    label: resolved.module.label
+                )
+                let gymAlert = readout.alert
                 let speechCentered = speech.phase == .speaking
                 let speechActive = speech.phase != .idle
                 let frame = geometry.frame(in: .global)
@@ -44,8 +70,8 @@ struct NovaAvatarOrb: View {
                         )
                     }
 
-                    if let gymHours {
-                        Text("\(gymHours)")
+                    if !readout.text.isEmpty {
+                        Text(readout.text)
                             .font(.novaMono(52))
                             .monospacedDigit()
                             .foregroundStyle(
@@ -56,7 +82,7 @@ struct NovaAvatarOrb: View {
                             .lineLimit(1)
                             .opacity(speechActive ? 0 : 1)
                             .animation(.easeOut(duration: 0.18), value: speechActive)
-                            .accessibilityLabel("Hours since last gym visit \(gymHours)")
+                            .accessibilityLabel(readout.accessibilityLabel)
                     }
                 }
                 .scaleEffect(speechCentered ? speechScale : 1)
@@ -73,21 +99,4 @@ struct NovaAvatarOrb: View {
         }
         .accessibilityLabel(speech.phase == .idle ? "Nova status orb" : "Nova is speaking")
     }
-}
-
-/// Whole hours since the watchface's last gym reset, or nil when there is no
-/// reset timestamp. Accepts ISO-8601 with or without fractional seconds.
-private func gymHoursSinceReset(_ value: String?, now: Date) -> Int? {
-    guard let value else { return nil }
-    let fractionalFormatter = ISO8601DateFormatter()
-    fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    let parsed = fractionalFormatter.date(from: value) ?? {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: value)
-    }()
-
-    guard let parsed else { return nil }
-    let seconds = max(0, now.timeIntervalSince(parsed))
-    return Int(seconds / 3600)
 }

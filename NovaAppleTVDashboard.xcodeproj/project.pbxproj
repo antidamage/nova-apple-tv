@@ -15,6 +15,9 @@
 		01A1B0060000000000000001 /* FluidBackgroundView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0060000000000000001 /* FluidBackgroundView.swift */; };
 		01A1B0070000000000000001 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0070000000000000001 /* AppConfig.swift */; };
 		01A1B0080000000000000002 /* OrbModules.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0080000000000000002 /* OrbModules.swift */; };
+		01A1B0F00000000000000203 /* OrbInfoConformanceCases.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0F00000000000000103 /* OrbInfoConformanceCases.swift */; };
+		01A1B0F00000000000000202 /* OrbInfoModules.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0F00000000000000102 /* OrbInfoModules.swift */; };
+		01A1B0F00000000000000201 /* OrbInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0F00000000000000101 /* OrbInfo.swift */; };
 		01A1B0080000000000000003 /* CameraFeedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0080000000000000003 /* CameraFeedView.swift */; };
 		01A1B0200000000000000001 /* DashboardComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0200000000000000001 /* DashboardComponents.swift */; };
 		01A1B0210000000000000001 /* DashboardFocus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0210000000000000001 /* DashboardFocus.swift */; };
@@ -59,6 +62,9 @@
 		01A1A0070000000000000001 /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
 		01A1A0080000000000000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		01A1A0080000000000000002 /* OrbModules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbModules.swift; sourceTree = "<group>"; };
+		01A1A0F00000000000000103 /* OrbInfoConformanceCases.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbInfoConformanceCases.swift; sourceTree = "<group>"; };
+		01A1A0F00000000000000102 /* OrbInfoModules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbInfoModules.swift; sourceTree = "<group>"; };
+		01A1A0F00000000000000101 /* OrbInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbInfo.swift; sourceTree = "<group>"; };
 		01A1A0080000000000000003 /* CameraFeedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraFeedView.swift; sourceTree = "<group>"; };
 		01A1A0200000000000000001 /* DashboardComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardComponents.swift; sourceTree = "<group>"; };
 		01A1A0210000000000000001 /* DashboardFocus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardFocus.swift; sourceTree = "<group>"; };
@@ -126,6 +132,9 @@
 				01A1A0030000000000000001 /* Models.swift */,
 				01A1A0010000000000000001 /* NovaAppleTVDashboardApp.swift */,
 				01A1A0080000000000000002 /* OrbModules.swift */,
+				01A1A0F00000000000000103 /* OrbInfoConformanceCases.swift */,
+				01A1A0F00000000000000102 /* OrbInfoModules.swift */,
+				01A1A0F00000000000000101 /* OrbInfo.swift */,
 				01A1A0280000000000000001 /* OrbBuiltins.swift */,
 				01A1A0300000000000000001 /* MetalOrbView.swift */,
 				01A1A0310000000000000001 /* OrbShader.metal */,
@@ -262,6 +271,9 @@
 				01A1B0030000000000000001 /* Models.swift in Sources */,
 				01A1B0010000000000000001 /* NovaAppleTVDashboardApp.swift in Sources */,
 				01A1B0080000000000000002 /* OrbModules.swift in Sources */,
+				01A1B0F00000000000000203 /* OrbInfoConformanceCases.swift in Sources */,
+				01A1B0F00000000000000202 /* OrbInfoModules.swift in Sources */,
+				01A1B0F00000000000000201 /* OrbInfo.swift in Sources */,
 				01A1B0280000000000000001 /* OrbBuiltins.swift in Sources */,
 				01A1B0300000000000000001 /* MetalOrbView.swift in Sources */,
 				01A1B0310000000000000001 /* OrbShader.metal in Sources */,
