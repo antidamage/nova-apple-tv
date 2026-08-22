@@ -386,6 +386,11 @@ enum ParitySelfTests {
     /// Mirrors nova::resolveEffectDimensions and the effect-scale corpus case.
     /// Dot cores, wires, and normalized backdrop geometry are invariant;
     /// pixel-sized halos, trails, and bloom grow with denser output.
+    ///
+    /// A module's `render.dotSizePixels` is the one quantity that moves the
+    /// other way — real device pixels, divided by the output height rather than
+    /// multiplied by the 1080p ratio — so it is digested here alongside them.
+    /// See `nova-visualiser-modules/specs/particle-grid-dot-size.md`.
     private static func testEffectScaleParity() {
         var hash: UInt64 = 1_469_598_103_934_665_603
         func mix(_ value: Float) {
@@ -410,12 +415,36 @@ enum ParitySelfTests {
                 0.48,              // normalized background feature radius
             ]
             dimensions.forEach(mix)
+            for pixels in [Float(0), 3.8, 12, 50, 200, 500] {
+                mix(phonoscopeDotSizeClip(pixels, outputHeight: height))
+            }
         }
 
         let produced = String(format: "effect-scale:%d:%016llx", heights.count, hash)
         assert(
-            produced == "effect-scale:3:0f7739d88e90c404",
+            produced == "effect-scale:3:a95f7475609c569b",
             "effect-scale parity drifted from nova-visualiser: \(produced)"
+        )
+
+        // The identity IS the "true device pixels" decision: twice the height,
+        // half the clip radius, for the same authored number of pixels. If dot
+        // size is ever routed through `effectScale`, this is the line that fails.
+        assert(
+            phonoscopeDotSizeClip(50, outputHeight: 2_160)
+                == phonoscopeDotSizeClip(50, outputHeight: 1_080) / 2,
+            "dot size stopped being measured in true device pixels"
+        )
+        // Zero means no dots. There is no visible floor to fall back to, on
+        // either engine.
+        assert(
+            phonoscopeDotSizeClip(0, outputHeight: 1_080) == 0,
+            "a zero dot size must publish zero, not a floor"
+        )
+        // 3.8px at the 1080-line authoring reference is the module's original
+        // baked 0.0035 clip units, to within a fiftieth of a pixel.
+        assert(
+            abs(phonoscopeDotSizeClip(3.8, outputHeight: 1_080) - 0.0035) < 0.00002,
+            "the authored dot size drifted away from 0.0035 clip at 1080p"
         )
     }
 

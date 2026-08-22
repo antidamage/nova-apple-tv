@@ -8,6 +8,28 @@ func phonoscopeModuleSeed(_ moduleID: String) -> UInt64 {
     moduleID.utf8.reduce(1_469_598_103_934_665_603) { ($0 ^ UInt64($1)) &* 1_099_511_628_211 }
 }
 
+/// Largest dot the renderer will draw, an order of magnitude above the module's
+/// declared 50px so a corrupt setting cannot allocate a screen-filling quad per
+/// entity. Mirrors `kMaxDotSizePixels` in `core/effect_scale.h`.
+let phonoscopeMaxDotSizePixels: Float = 200
+
+/// Dot diameter in true device pixels, as a clip-space radius.
+///
+/// Mirrors `nova::dotSizeClip`. It deliberately does NOT go through the 1080p
+/// `effectScale` every soft effect uses: those are authored at 1080 lines and
+/// multiplied by the ratio so their weight stays constant, while a dot is
+/// divided by the height because it is an object with a size. 50px is 50 real
+/// pixels at 1080p and 50 real pixels at 4K. See
+/// `nova-visualiser-modules/specs/particle-grid-dot-size.md`.
+///
+/// The divide is exact because the vertex shader's local space is
+/// `corner * effectScale` and its quad offset `corner * size * effectScale`, so
+/// the fragment shader's `|local| = 1` core edge sits at a clip radius of
+/// exactly `size`, and clip Y spans `outputHeight` pixels.
+func phonoscopeDotSizeClip(_ dotSizePixels: Float, outputHeight: Float) -> Float {
+    max(0, min(phonoscopeMaxDotSizePixels, dotSizePixels)) / max(1, outputHeight)
+}
+
 private func phonoscopePaletteSlots(in expression: String) -> [String] {
     let parts = expression.components(
         separatedBy: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_")).inverted
@@ -217,6 +239,7 @@ final class PhonoscopeSimulation {
     private var pendingTransitionDuration: Double = 0.6
     private var pendingTransitionPaused = false
     private var pendingReloadGeneration = 0
+    private var pendingOutputHeight: Float = 1080
     private var pendingModuleKey = ""
 
     private var module: PhonoscopeModule?
@@ -229,6 +252,9 @@ final class PhonoscopeSimulation {
     private var transitionDuration: Double = 0.6
     private var transitionPaused = false
     private var reloadGeneration = 0
+    // Presentation height in pixels, the divisor for a module's
+    // `render.dotSizePixels`. Mirrors `Simulation::outputHeight_`.
+    private var outputHeight: Float = 1080
     private var moduleKey = ""
     private var entities: [PhonoscopeSimEntity] = []
     private var fields: [PhonoscopeFieldRange] = []
@@ -287,6 +313,22 @@ final class PhonoscopeSimulation {
         inputLock.unlock()
     }
 
+    /// The height in pixels of the picture the viewer sees. A module's
+    /// `render.dotSizePixels` is in real device pixels, so this is the divisor
+    /// that turns it into clip space.
+    ///
+    /// Deliberately the PRESENTATION height and not `MTKView.drawableSize.height`:
+    /// the renderer adapts `renderScale` between 0.65 and 1 under load and
+    /// upscales the result to the panel, so a dot tied to the drawable would
+    /// visibly shrink whenever the frame rate dipped and grow back when it
+    /// recovered. Separate from `update(...)` because it changes on a completely
+    /// different cadence — a layout event, not a config publish.
+    func setOutputHeight(_ height: Float) {
+        inputLock.lock()
+        pendingOutputHeight = max(1, min(16384, height))
+        inputLock.unlock()
+    }
+
     func snapshot() -> PhonoscopeSceneSnapshot? {
         outputLock.lock()
         defer { outputLock.unlock() }
@@ -303,8 +345,12 @@ final class PhonoscopeSimulation {
         let nextTransitionDuration = pendingTransitionDuration
         let nextTransitionPaused = pendingTransitionPaused
         let nextReloadGeneration = pendingReloadGeneration
+        let nextOutputHeight = pendingOutputHeight
         let nextKey = pendingModuleKey
         inputLock.unlock()
+        // Not chased toward like the settings below: a resolution change is a
+        // cut, and easing a dot through the intermediate sizes reads as a glitch.
+        outputHeight = nextOutputHeight
         let requiresRebuild = nextKey != moduleKey || nextReloadGeneration != reloadGeneration
         if !requiresRebuild {
             for (key, target) in nextSettings {
@@ -448,10 +494,19 @@ final class PhonoscopeSimulation {
             let threshold = Float(settings["peak_threshold"] ?? 0.28)
             let glow = Float(settings["peak_glow"] ?? 6.5)
             let trail = Float(settings["trail_length"] ?? 7)
+            // Pixels become a clip radius once, above the loop: the divisor is
+            // the frame's height, not anything per dot. The 3.8 fallback is the
+            // manifest default, so a settings group saved before `dot_size`
+            // existed renders the authored size rather than nothing. Clamped on
+            // the same 0...0.32 axis the entity builder uses; zero is legal and
+            // means no dots.
+            let dotSize = max(0, min(0.32, phonoscopeDotSizeClip(
+                Float(settings["dot_size"] ?? 3.8), outputHeight: outputHeight)))
             for index in entities.indices {
                 entities[index].flareThreshold = threshold
                 entities[index].flareGlow = glow
                 entities[index].trailLength = trail
+                entities[index].size = dotSize
             }
         }
     }
@@ -743,10 +798,21 @@ final class PhonoscopeSimulation {
         let flareGlow = Float(PhonoscopeExpression.evaluate(render["flareGlow"], inputs: inputs, fallback: 0))
         let trailLength = Float(PhonoscopeExpression.evaluate(render["trailLength"], inputs: inputs, fallback: 0))
         let lifetime = Float(PhonoscopeExpression.evaluate(value["lifetime"], inputs: inputs, fallback: 0))
+        // `render.dotSizePixels` is a diameter in TRUE DEVICE PIXELS of the
+        // output and wins wherever it is present; `transform.scale[0]` is the
+        // legacy clip-space size and stays the fallback for every module that
+        // predates the key. Both are still evaluated here, at build, so the very
+        // first published frame is right before `advanceConfiguration` has run
+        // the live pass once. Mirrors `Simulation::styledEntity`.
         let transform = value["transform"]?.objectValue
         let scaleValue = transform?["scale"]
         let size: Float
-        if let array = scaleValue?.arrayValue, let first = array.first {
+        if let dotPixels = render["dotSizePixels"] {
+            size = phonoscopeDotSizeClip(
+                Float(PhonoscopeExpression.evaluate(dotPixels, inputs: inputs, fallback: 3.8)),
+                outputHeight: outputHeight
+            )
+        } else if let array = scaleValue?.arrayValue, let first = array.first {
             size = Float(PhonoscopeExpression.evaluate(first, inputs: inputs, fallback: 0.025))
         } else {
             size = Float(PhonoscopeExpression.evaluate(scaleValue, inputs: inputs, fallback: 0.025))
@@ -818,7 +884,12 @@ final class PhonoscopeSimulation {
             origin: position,
             phase: phase,
             lifetime: max(0, lifetime),
-            size: max(0.003, min(0.32, size)),
+            // Floors at 0, not 0.003. A `dotSizePixels` dot is authored in real
+            // pixels down to zero, and 0.003 clip is 3.24px at 1080p — the old
+            // floor would have silently clamped the bottom of the declared range
+            // here and not on Iridium, and `dot_size: 0` would not have turned
+            // the dots off.
+            size: max(0, min(0.32, size)),
             energySize: max(0, min(0.32, energySize)),
             beatSize: max(0, min(0.32, beatSize)),
             flareThreshold: max(0, min(2, flareThreshold)),
@@ -1209,6 +1280,13 @@ final class PhonoscopeSimulation {
         diagnostics.simulationMilliseconds = (CACurrentMediaTime() - started) * 1_000
         var particles: [PhonoscopeRenderParticle] = []
         particles.reserveCapacity(entities.count * 3)
+        // Parallel to `entities`: the size each one was published at this frame.
+        // The grid-wire pass below runs after the entity loop and needs BOTH of a
+        // wire's endpoints at their drawn size. Zeroed rather than merely sized:
+        // a cell outside the live extent is skipped and never writes an entry,
+        // and a wire must not pick up last frame's size for it. Mirrors
+        // `Simulation::publishedSize_`.
+        var publishedSize = [Float](repeating: 0, count: entities.count)
         func renderedColors(for entity: PhonoscopeSimEntity) -> (SIMD4<Float>, SIMD4<Float>) {
             let usesThemePalette = entity.usesThemePalette || module?.id == "particle-ripples"
             guard usesThemePalette else { return (entity.color, entity.color) }
@@ -1247,6 +1325,7 @@ final class PhonoscopeSimulation {
                 + energy * entity.energySize
                 + Float(signal.beatPulse) * entity.beatSize
                 + flare * entity.flareSize
+            publishedSize[entityIndex] = size
             let glow = entity.glow + energy + flare * entity.flareGlow
             particles.append(PhonoscopeRenderParticle(
                 position: entity.position,
@@ -1292,6 +1371,13 @@ final class PhonoscopeSimulation {
             // that are not drawn.
             let columnEnd = field.columnBegin + field.liveColumns
             let rowEnd = field.rowBegin + field.liveRows
+            // Half-width at one end of a wire, from the size that end's dot was
+            // drawn at — the composed size, so a wire thickens where a ripple is
+            // passing rather than sitting at the field's uniform base size. The
+            // floor is what keeps a hairline lattice when the dots are at zero.
+            func endWidth(_ index: Int) -> Float {
+                max(0.0006, publishedSize[index] * 0.18)
+            }
             func appendLine(from start: Int, to end: Int) {
                 guard field.range.contains(start), field.range.contains(end) else { return }
                 let source = entities[start]
@@ -1302,12 +1388,15 @@ final class PhonoscopeSimulation {
                     colorEnd: palette.color(field.lineEndSlot),
                     glowColor: palette.color(field.lineStartSlot),
                     glowColorEnd: palette.color(field.lineEndSlot),
-                    size: max(0.0006, min(source.size, destination.size) * 0.18),
+                    // Two widths: `size` is the destination end, `sourceSize` the
+                    // source end, and the shader tapers between them.
+                    size: endWidth(end),
                     glow: 0,
                     primitive: 6,
                     material: 0,
                     trailDirection: destination.position - source.position,
-                    trailLength: 1
+                    trailLength: 1,
+                    sourceSize: endWidth(start)
                 ))
             }
             for z in 0..<field.depth {

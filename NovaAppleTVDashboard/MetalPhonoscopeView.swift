@@ -272,6 +272,11 @@ struct MetalPhonoscopeView: UIViewRepresentable {
         let fpsBinding = $measuredFramesPerSecond
         renderer.onFPSUpdate = { fpsBinding.wrappedValue = $0 }
         context.coordinator.simulation.start()
+        // Seeded before the first tick so the opening frame is not sized against
+        // the 1080-line default on a 4K Apple TV; `adjustRenderScale` keeps it
+        // current from then on.
+        context.coordinator.simulation.setOutputHeight(
+            Float(max(1, UIScreen.main.bounds.height * UIScreen.main.scale)))
         context.coordinator.simulation.update(
             module: module,
             signal: signal,
@@ -492,7 +497,7 @@ final class MetalPhonoscopeRenderer: NSObject, MTKViewDelegate {
                     colorEnd: $0.colorEnd,
                     glowColor: $0.glowColor,
                     glowColorEnd: $0.glowColorEnd,
-                    meta: SIMD4($0.glow, $0.primitive, $0.material, 0),
+                    meta: SIMD4($0.glow, $0.primitive, $0.material, $0.sourceSize),
                     trail: SIMD4(
                         $0.trailDirection.x,
                         $0.trailDirection.y,
@@ -982,6 +987,12 @@ final class MetalPhonoscopeRenderer: NSObject, MTKViewDelegate {
             fastFrames = 0
         }
         let bounds = view.bounds.size
+        // The PANEL's height, WITHOUT renderScale. A module's `dotSizePixels` is
+        // in real device pixels of the picture the viewer sees, and the drawable
+        // above is an adaptive-quality target that gets upscaled to the panel —
+        // sizing dots against it would make them shrink whenever the frame rate
+        // dipped and grow back when it recovered.
+        simulation.setOutputHeight(Float(max(1, bounds.height * UIScreen.main.scale)))
         let scale = UIScreen.main.scale * renderScale
         let next = CGSize(width: max(1, bounds.width * scale), height: max(1, bounds.height * scale))
         if abs(next.width - view.drawableSize.width) > 2 || abs(next.height - view.drawableSize.height) > 2 {

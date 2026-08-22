@@ -656,6 +656,12 @@ struct PhonoscopeRenderParticle {
     var material: Float
     var trailDirection: SIMD3<Float>
     var trailLength: Float
+    /// A grid wire's half-width at its SOURCE end; `size` above is the
+    /// destination end's. A wire tapers along its length between the two dots it
+    /// connects, and the vertex shader interpolates between these two on the
+    /// `progress` it already walks the line with. Zero on every other primitive.
+    /// Packed into `meta.w`, matching `Simulation::publish`.
+    var sourceSize: Float = 0
 }
 
 struct PhonoscopeDiagnostics: Equatable, Sendable {

@@ -70,7 +70,10 @@ vertex PhonoscopeVertexOut phonoscope_vertex(
     }
     float aspect = max(0.01, uniforms.viewport.x / max(1.0, uniforms.viewport.y));
     // The scene was authored against a 1080-line drawable. Only effects grow
-    // with the output resolution: dot cores and grid-wire widths stay fixed.
+    // with the output resolution; dot cores and grid-wire widths keep exactly
+    // the clip footprint the simulation gave them. A module authoring its dots
+    // with `render.dotSizePixels` sizes them in real device pixels on the
+    // simulation side, which this expansion is deliberately blind to.
     float effectScale = max(1.0, uniforms.viewport.y / 1080.0);
 
     PhonoscopeVertexOut out;
@@ -88,8 +91,12 @@ vertex PhonoscopeVertexOut phonoscope_vertex(
         float2 clipNormal = float2(-screenDirection.y / aspect, screenDirection.x);
         float progress = (corners[vertexID].x + 1.0) * 0.5;
         float2 lineCenter = p.xy - delta * (1.0 - progress);
+        // Each end of a wire meets a dot, so the wire tapers between the two: at
+        // progress 0 it is the source dot's width (`meta.w`), at 1 the
+        // destination's (`positionSize.w`).
+        float halfWidth = mix(particle.meta.w, particle.positionSize.w, progress);
         out.position = float4(
-            lineCenter + clipNormal * corners[vertexID].y * particle.positionSize.w,
+            lineCenter + clipNormal * corners[vertexID].y * halfWidth,
             0,
             1
         );
