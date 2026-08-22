@@ -182,7 +182,7 @@ struct TVDashboardView: View {
             }
         }
         .onChange(of: isPhonoscopePresented) { _, presented in
-            setScreenAwake(presented)
+            setScreenAwake(presented && phonoscope.signal.playing)
             if !presented, phonoscope.housePartyEnabled {
                 // The dashboard is fully transparent while Phonoscope is up.
                 // Keep its followed palette intact through the crossfade back,
@@ -192,6 +192,10 @@ struct TVDashboardView: View {
                     delay: phonoscopeTransitionSeconds
                 )
             }
+        }
+        .onChange(of: phonoscope.signal.playing) { _, playing in
+            guard isPhonoscopePresented else { return }
+            setScreenAwake(playing)
         }
         .onChange(of: phonoscope.visualizerTheme) { _, visualizerTheme in
             guard phonoscope.housePartyEnabled else { return }
@@ -224,7 +228,7 @@ struct TVDashboardView: View {
             // and interruptions. Reassert the lease when the app returns so
             // the system screen saver cannot take over a running visualiser.
             if phase == .active {
-                setScreenAwake(isPhonoscopePresented)
+                setScreenAwake(isPhonoscopePresented && phonoscope.signal.playing)
             }
         }
         .onDisappear {
