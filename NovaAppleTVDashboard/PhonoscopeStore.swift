@@ -1214,9 +1214,16 @@ final class PhonoscopeStore: ObservableObject {
             backgroundTransition = shape?.params ?? PhonoscopeCentreTransitionParams()
             let length = backgroundTransitionAttack + backgroundTransitionHold
                 + backgroundTransitionRelease
-            // Nothing to leave from, or no time to do it in, means it is simply
-            // there — a first paint should not fly on from off screen.
-            backgroundImageProgress = (backgroundImageFromURL != nil && length > 0) ? 0 : 1
+            // Only the ramp's length decides whether this is a transition or a
+            // cut. Deliberately NOT the centre's `from != nil` test: the
+            // backdrop is one slot with two occupants, and a nil URL is the
+            // procedural FIELD rather than an absence, so there is always
+            // something leaving. Gating on an outgoing image is what made
+            // "no background" → "a background" cut instantly however long the
+            // ramp was, and the first paint dissolves for the same reason —
+            // the field really is on screen before the first image arrives.
+            // See nova-visualiser/specs/backdrop-transitions.md.
+            backgroundImageProgress = length > 0 ? 0 : 1
             if backgroundImageProgress >= 1 { backgroundImageFromURL = nil }
         }
 

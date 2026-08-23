@@ -94,14 +94,20 @@ static float bandEdge(float t, float extent, float opacity, float size) {
 // A port of `imagePlane()` in nova-visualiser/src/shaders/fluid_background.frag,
 // which is itself the same transform `phonoscope_centre_image` runs. `uv` is the
 // top-left-origin frame space both sides work in.
+//
+// `mode` is a parameter rather than `uniforms.imageMode` read directly, because
+// the mode that applies is not always the one that was authored: a change whose
+// other occupant is the procedural field is always a cross-fade, since a field
+// has no rectangle to flip or slide. See
+// nova-visualiser/specs/backdrop-transitions.md.
 static float4 backgroundImagePlane(texture2d<float> image,
                                    float2 halfExtent,
                                    bool incoming,
                                    float2 frameUv,
+                                   int mode,
                                    constant FluidBackgroundUniforms &uniforms) {
     if (halfExtent.x <= 0.0 || halfExtent.y <= 0.0) return float4(0.0);
 
-    int mode = int(uniforms.imageMode + 0.5);
     float frameAspect = uniforms.frameAspect;
     float2 centred = (frameUv - 0.5) * float2(frameAspect, 1.0);
 
@@ -163,42 +169,43 @@ static float4 backgroundImagePlane(texture2d<float> image,
     return image.sample(mosaicSampler, texel);
 }
 
-// The background image as one premultiplied colour, transitions resolved.
+// ONE image occupant of the backdrop slot, as a finished, framed picture.
 //
-// Mirrors `imageField()` in the GLSL: a flip and a slide draw exactly ONE plane,
-// swapping at the midpoint, and only a cross-fade draws both. Where nothing
-// covers, the theme's backdrop colour shows through, so a fitted image smaller
-// than the frame sits on the palette rather than on a hole.
-static float3 backgroundImageField(texture2d<float> imageTo,
-                                   texture2d<float> imageFrom,
-                                   float2 frameUv,
-                                   constant FluidBackgroundUniforms &uniforms) {
-    int mode = int(uniforms.imageMode + 0.5);
-    bool hasFrom = uniforms.hasImageFrom > 0.5;
-    float weight = clamp(uniforms.imageProgress, 0.0, 1.0);
-
-    float2 extentTo = float2(uniforms.imageHalfExtentToX, uniforms.imageHalfExtentToY);
-    float2 extentFrom = float2(uniforms.imageHalfExtentFromX, uniforms.imageHalfExtentFromY);
-
-    float4 accumulated = float4(0.0);
-    if (mode != kImageModeCrossFade && hasFrom) {
-        accumulated = weight >= 0.5
-            ? backgroundImagePlane(imageTo, extentTo, true, frameUv, uniforms)
-            : backgroundImagePlane(imageFrom, extentFrom, false, frameUv, uniforms);
-    } else {
-        accumulated = backgroundImagePlane(imageTo, extentTo, true, frameUv, uniforms) * weight;
-        if (hasFrom) {
-            accumulated +=
-                backgroundImagePlane(imageFrom, extentFrom, false, frameUv, uniforms)
-                * (1.0 - weight);
-        }
-    }
-
-    // Both planes are premultiplied at decode time, so this IS the source-over
+// Mirrors `imageOccupant()` in the GLSL. The plane over the theme's backdrop
+// colour, then the vignette closed over the whole frame -- with an image there
+// is no band, so the fit IS the geometry. Where nothing covers, the backdrop
+// colour shows through, so a fitted image smaller than the frame sits on the
+// palette rather than on a hole.
+//
+// Returned finished rather than as a colour to be blended later, because the
+// other occupant is framed on entirely different terms (band-local) and the two
+// framings are cross-dissolved rather than reconciled. See
+// nova-visualiser/specs/backdrop-transitions.md.
+static float3 backgroundImageOccupant(texture2d<float> image,
+                                      float2 halfExtent,
+                                      bool incoming,
+                                      int mode,
+                                      float2 frameUv,
+                                      bool banded,
+                                      float vignetteOpacity,
+                                      float vignetteSize,
+                                      float3 vignetteColor,
+                                      constant FluidBackgroundUniforms &uniforms) {
+    float4 plane = backgroundImagePlane(image, halfExtent, incoming, frameUv, mode, uniforms);
+    // The plane is premultiplied at decode time, so this IS the source-over
     // term -- not a mix, which would darken the image by its own coverage a
     // second time.
-    float coverage = clamp(accumulated.a, 0.0, 1.0);
-    return accumulated.rgb + uniforms.background.rgb * (1.0 - coverage);
+    float coverage = clamp(plane.a, 0.0, 1.0);
+    float3 color = saturate(plane.rgb + uniforms.background.rgb * (1.0 - coverage));
+    if (banded) {
+        float left = bandEdge(frameUv.x, 0.18, vignetteOpacity, vignetteSize);
+        float right = bandEdge(1.0 - frameUv.x, 0.18, vignetteOpacity, vignetteSize);
+        float top = bandEdge(frameUv.y, 0.28, vignetteOpacity, vignetteSize);
+        float bottom = bandEdge(1.0 - frameUv.y, 0.28, vignetteOpacity, vignetteSize);
+        float shade = 1.0 - (1.0 - left) * (1.0 - right) * (1.0 - top) * (1.0 - bottom);
+        color = mix(color, vignetteColor, shade);
+    }
+    return saturate(color);
 }
 
 vertex VertexOut fluidBackgroundVertex(uint vertexID [[vertex_id]]) {
@@ -293,47 +300,26 @@ static float mosaicBackgroundOverlay(float2 uv,
     return clamp(map.b, 0.0, 1.0);
 }
 
-fragment float4 fluidBackgroundFragment(VertexOut in [[stage_in]],
-                                        constant FluidBackgroundUniforms &uniforms [[buffer(0)]],
-                                        texture2d<float> mosaicTexture [[texture(0)]],
-                                        texture2d<float> backgroundImageTo [[texture(1)]],
-                                        texture2d<float> backgroundImageFrom [[texture(2)]]) {
-    float2 resolution = max(uniforms.resolution, float2(1.0, 1.0));
-    float aspect = resolution.x / resolution.y;
-    float textureScale = uniforms.textureScale;
-    float uiScaleMultiplier = max(uniforms.uiScaleMultiplier, 0.0001);
-    float2 uv = mosaicMappedUv(in.uv, aspect, mosaicTexture, uniforms.hasMosaicTexture, textureScale, uiScaleMultiplier);
-    float backgroundOverlay = mosaicBackgroundOverlay(in.uv, aspect, mosaicTexture, uniforms.hasMosaicTexture, textureScale, uiScaleMultiplier);
-
-    // Band geometry. Not banded is the dashboard background's case: no clip,
-    // no vignette, and `uv` is left exactly as it was.
-    bool banded = uniforms.bandEnabled > 0.5;
-    float heightFraction = clamp(uniforms.bandFraction, 0.0, 1.0);
-    float widthFraction = clamp(uniforms.bandWidthFraction, 0.0, 1.0);
-    float vignetteOpacity = clamp(uniforms.vignetteOpacity, 0.0, 1.0);
-    float vignetteSize = max(uniforms.vignetteSize, 0.0);
-    float3 vignetteColor = uniforms.vignetteColor.rgb;
-
-    // A background image REPLACES the field rather than layering over it, and
-    // it brings its own geometry: the width, height and scale sized the band
-    // when the band was the backdrop, and they size the IMAGE when the image is.
-    // So there is no band to clip -- the fitted rectangle is the geometry, and
-    // the vignette closes over the whole frame around it. Mirrors the same early
-    // branch in nova-visualiser's fluid_background.frag.
-    if (uniforms.hasImage > 0.5) {
-        float3 imageColor = saturate(
-            backgroundImageField(backgroundImageTo, backgroundImageFrom, in.uv, uniforms));
-        if (banded) {
-            float left = bandEdge(in.uv.x, 0.18, vignetteOpacity, vignetteSize);
-            float right = bandEdge(1.0 - in.uv.x, 0.18, vignetteOpacity, vignetteSize);
-            float top = bandEdge(in.uv.y, 0.28, vignetteOpacity, vignetteSize);
-            float bottom = bandEdge(1.0 - in.uv.y, 0.28, vignetteOpacity, vignetteSize);
-            float shade = 1.0 - (1.0 - left) * (1.0 - right) * (1.0 - top) * (1.0 - bottom);
-            imageColor = mix(imageColor, vignetteColor, shade);
-        }
-        return float4(saturate(imageColor), 1.0);
-    }
-
+// The OTHER occupant of the backdrop slot, as a finished, framed picture: the
+// blob field, clipped into its band and framed by the edge gradients.
+//
+// Mirrors `fieldOccupant()` in the GLSL, with ONE deliberate divergence: the
+// GLSL also carries a `hasField` branch for a module that never declared the
+// blob field, where the backdrop is a flat colour the composite draws instead.
+// This surface has no equivalent because the view itself is only in the tree
+// when the module declares the field (`usesLetterboxedBackground` in
+// PhonoscopeView.swift) -- there is no fieldless case to draw here.
+static float3 backgroundFieldOccupant(float2 uv,
+                                      float2 resolution,
+                                      float aspect,
+                                      bool banded,
+                                      float backgroundOverlay,
+                                      float heightFraction,
+                                      float widthFraction,
+                                      float vignetteOpacity,
+                                      float vignetteSize,
+                                      float3 vignetteColor,
+                                      constant FluidBackgroundUniforms &uniforms) {
     float inBand = 1.0;
     float bandLocalX = uv.x;
     float bandLocalY = uv.y;
@@ -355,7 +341,7 @@ fragment float4 fluidBackgroundFragment(VertexOut in [[stage_in]],
         if (inBand <= 0.0) {
             // Outside the band is the vignette colour at full coverage, not a
             // hole: the bars and the gradient inside the band are one surface.
-            return float4(saturate(vignetteColor), 1.0);
+            return saturate(vignetteColor);
         }
         uv = clamp(float2(bandLocalX, bandLocalY), 0.0, 1.0);
     }
@@ -420,5 +406,100 @@ fragment float4 fluidBackgroundFragment(VertexOut in [[stage_in]],
         color = mix(vignetteColor, color, inBand);
     }
 
-    return float4(saturate(color), 1.0);
+    return saturate(color);
+}
+
+fragment float4 fluidBackgroundFragment(VertexOut in [[stage_in]],
+                                        constant FluidBackgroundUniforms &uniforms [[buffer(0)]],
+                                        texture2d<float> mosaicTexture [[texture(0)]],
+                                        texture2d<float> backgroundImageTo [[texture(1)]],
+                                        texture2d<float> backgroundImageFrom [[texture(2)]]) {
+    float2 resolution = max(uniforms.resolution, float2(1.0, 1.0));
+    float aspect = resolution.x / resolution.y;
+    float textureScale = uniforms.textureScale;
+    float uiScaleMultiplier = max(uniforms.uiScaleMultiplier, 0.0001);
+    float2 uv = mosaicMappedUv(in.uv, aspect, mosaicTexture, uniforms.hasMosaicTexture, textureScale, uiScaleMultiplier);
+    float backgroundOverlay = mosaicBackgroundOverlay(in.uv, aspect, mosaicTexture, uniforms.hasMosaicTexture, textureScale, uiScaleMultiplier);
+
+    // Band geometry. Not banded is the dashboard background's case: no clip,
+    // no vignette, and `uv` is left exactly as it was.
+    bool banded = uniforms.bandEnabled > 0.5;
+    float heightFraction = clamp(uniforms.bandFraction, 0.0, 1.0);
+    float widthFraction = clamp(uniforms.bandWidthFraction, 0.0, 1.0);
+    float vignetteOpacity = clamp(uniforms.vignetteOpacity, 0.0, 1.0);
+    float vignetteSize = max(uniforms.vignetteSize, 0.0);
+    float3 vignetteColor = uniforms.vignetteColor.rgb;
+
+    // The backdrop is ONE slot with two possible occupants, and a change
+    // between any two of them is a transition on the authored ramp. A null
+    // image on either side is the FIELD occupant, not an absence -- which is
+    // what makes "no background" -> "a background" a real change rather than a
+    // cut. nova-visualiser/specs/backdrop-transitions.md is the authority; this
+    // mirrors main() in nova-visualiser/src/shaders/fluid_background.frag.
+    bool toIsImage = uniforms.hasImage > 0.5;
+    bool fromIsImage = uniforms.hasImageFrom > 0.5;
+    int authoredMode = int(uniforms.imageMode + 0.5);
+    float weight = clamp(uniforms.imageProgress, 0.0, 1.0);
+    float2 extentTo = float2(uniforms.imageHalfExtentToX, uniforms.imageHalfExtentToY);
+    float2 extentFrom = float2(uniforms.imageHalfExtentFromX, uniforms.imageHalfExtentFromY);
+
+    // Image -> image under a flip or a slide draws exactly ONE plane, swapping
+    // at the exact midpoint. That instant is what makes a flip read as one
+    // object turning over rather than two images blending through each other.
+    if (toIsImage && fromIsImage && authoredMode != kImageModeCrossFade) {
+        float3 color = weight >= 0.5
+            ? backgroundImageOccupant(backgroundImageTo, extentTo, true, authoredMode, in.uv,
+                                      banded, vignetteOpacity, vignetteSize, vignetteColor, uniforms)
+            : backgroundImageOccupant(backgroundImageFrom, extentFrom, false, authoredMode, in.uv,
+                                      banded, vignetteOpacity, vignetteSize, vignetteColor, uniforms);
+        return float4(color, 1.0);
+    }
+
+    // Everything else is a cross-dissolve of two finished, framed pictures. The
+    // geometry is always the cross-fade's here: either both sides are images
+    // under an authored cross-fade, or one side is the field -- and a field has
+    // no rectangle to flip or slide, so the mode is ignored rather than
+    // half-applied.
+    //
+    // Framings are dissolved, not reconciled: an image is framed whole-frame
+    // and the band is framed band-locally, and mixing the two finished results
+    // is what keeps both endpoints pixel-identical to the picture each occupant
+    // draws on its own.
+    //
+    // The ends short-circuit so a steady backdrop costs exactly what it cost
+    // before any of this existed -- one occupant, evaluated once.
+    if (weight >= 1.0) {
+        float3 color = toIsImage
+            ? backgroundImageOccupant(backgroundImageTo, extentTo, true, kImageModeCrossFade, in.uv,
+                                      banded, vignetteOpacity, vignetteSize, vignetteColor, uniforms)
+            : backgroundFieldOccupant(uv, resolution, aspect, banded, backgroundOverlay,
+                                      heightFraction, widthFraction, vignetteOpacity, vignetteSize,
+                                      vignetteColor, uniforms);
+        return float4(color, 1.0);
+    }
+    if (weight <= 0.0) {
+        float3 color = fromIsImage
+            ? backgroundImageOccupant(backgroundImageFrom, extentFrom, false, kImageModeCrossFade,
+                                      in.uv, banded, vignetteOpacity, vignetteSize, vignetteColor,
+                                      uniforms)
+            : backgroundFieldOccupant(uv, resolution, aspect, banded, backgroundOverlay,
+                                      heightFraction, widthFraction, vignetteOpacity, vignetteSize,
+                                      vignetteColor, uniforms);
+        return float4(color, 1.0);
+    }
+
+    float3 leaving = fromIsImage
+        ? backgroundImageOccupant(backgroundImageFrom, extentFrom, false, kImageModeCrossFade,
+                                  in.uv, banded, vignetteOpacity, vignetteSize, vignetteColor,
+                                  uniforms)
+        : backgroundFieldOccupant(uv, resolution, aspect, banded, backgroundOverlay,
+                                  heightFraction, widthFraction, vignetteOpacity, vignetteSize,
+                                  vignetteColor, uniforms);
+    float3 arriving = toIsImage
+        ? backgroundImageOccupant(backgroundImageTo, extentTo, true, kImageModeCrossFade, in.uv,
+                                  banded, vignetteOpacity, vignetteSize, vignetteColor, uniforms)
+        : backgroundFieldOccupant(uv, resolution, aspect, banded, backgroundOverlay,
+                                  heightFraction, widthFraction, vignetteOpacity, vignetteSize,
+                                  vignetteColor, uniforms);
+    return float4(saturate(mix(leaving, arriving, weight)), 1.0);
 }
