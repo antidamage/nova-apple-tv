@@ -602,9 +602,71 @@ enum ParitySelfTests {
             }
         }
 
+        // The backdrop slot's TRANSITIONS, on the same digest. The band above is
+        // one occupant of the slot and a background image is the other; these
+        // are the rules for changing between them, mirroring
+        // `backdropSwapsPlanes`, `backdropTransitionMode`, `backdropDissolve`
+        // and `backdropImageOver` in
+        // nova-visualiser/src/core/background_band_reference.h. See
+        // nova-visualiser/specs/backdrop-transitions.md.
+
+        /// Exactly ONE plane, swapping at the midpoint, rather than two
+        /// dissolving. Only image → image under a flip or a slide: a field has
+        /// no rectangle to flip or slide, so the mode is ignored rather than
+        /// half-applied whenever the field is on either side.
+        func swapsPlanes(_ toIsImage: Bool, _ fromIsImage: Bool, _ authored: Int) -> Bool {
+            toIsImage && fromIsImage && authored != 0
+        }
+        func appliedMode(_ toIsImage: Bool, _ fromIsImage: Bool, _ authored: Int) -> Int {
+            (toIsImage && fromIsImage) ? authored : 0
+        }
+        func dissolve(_ leaving: SIMD4<Float>, _ arriving: SIMD4<Float>, _ progress: Float)
+            -> SIMD4<Float>
+        {
+            let w = min(max(progress, 0), 1)
+            return leaving + (arriving - leaving) * w
+        }
+        func imageOver(_ plane: SIMD4<Float>, _ backdrop: SIMD3<Float>) -> SIMD4<Float> {
+            let coverage = min(max(plane.w, 0), 1)
+            return SIMD4<Float>(
+                plane.x + backdrop.x * (1 - coverage),
+                plane.y + backdrop.y * (1 - coverage),
+                plane.z + backdrop.z * (1 - coverage),
+                1)
+        }
+
+        let progresses: [Float] = [0, 0.25, 0.5, 0.75, 1]
+        let leavingPicture = SIMD4<Float>(0.62, 0.48, 0.71, 1)
+        let arrivingPicture = SIMD4<Float>(0.13, 0.55, 0.29, 1)
+        let plane = SIMD4<Float>(0.21, 0.09, 0.34, 0.5)
+        let imageBackdrop = SIMD3<Float>(0.06, 0.02, 0.14)
+        for toIsImage in [false, true] {
+            for fromIsImage in [false, true] {
+                for authored in 0 ... 2 {
+                    mix(swapsPlanes(toIsImage, fromIsImage, authored) ? 1 : 0)
+                    mix(Float(appliedMode(toIsImage, fromIsImage, authored)))
+                    samples += 1
+                    for progress in progresses {
+                        let dissolved = dissolve(leavingPicture, arrivingPicture, progress)
+                        mix(dissolved.x)
+                        mix(dissolved.y)
+                        mix(dissolved.z)
+                        mix(dissolved.w)
+                        samples += 1
+                    }
+                }
+            }
+        }
+        let over = imageOver(plane, imageBackdrop)
+        mix(over.x)
+        mix(over.y)
+        mix(over.z)
+        mix(over.w)
+        samples += 1
+
         let produced = String(format: "background-band:%d:%016llx", samples, hash)
         assert(
-            produced == "background-band:5184:e5070cd8a984720d",
+            produced == "background-band:5257:565b1131fd6481fd",
             "background band parity drifted from nova-visualiser: \(produced)"
         )
     }
