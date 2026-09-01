@@ -23,6 +23,15 @@ if [[ -n "${NOVA_APPLE_BUNDLE_IDENTIFIER:-}" ]]; then
   signing_args+=("PRODUCT_BUNDLE_IDENTIFIER=${NOVA_APPLE_BUNDLE_IDENTIFIER}")
 fi
 
+# Household camera-proxy override, same private deploy.env this script
+# already sources for signing. Empty when unset, matching the public build's
+# no-override default (Info.plist's $(NOVA_CAMERA_BASE_URL)/$(NOVA_CAMERA_TOKEN)
+# substitute to "", and AppConfig.swift treats an empty string as unset).
+camera_args=(
+  "NOVA_CAMERA_BASE_URL=${NOVA_CAMERA_BASE_URL:-}"
+  "NOVA_CAMERA_TOKEN=${NOVA_CAMERA_TOKEN:-}"
+)
+
 xcodebuild \
   -allowProvisioningUpdates \
   -allowProvisioningDeviceRegistration \
@@ -32,6 +41,7 @@ xcodebuild \
   -destination generic/platform=tvOS \
   -derivedDataPath ./DerivedData \
   "${signing_args[@]}" \
+  "${camera_args[@]}" \
   build 2>&1 | tee gui-build.log
 
 build_status=${pipestatus[1]}

@@ -202,6 +202,9 @@ struct OutsideCameraPanel: View {
             var request = URLRequest(url: url)
             request.cachePolicy = .reloadIgnoringLocalCacheData
             request.timeoutInterval = 4
+            for (field, value) in AppConfig.cameraHeaders {
+                request.setValue(value, forHTTPHeaderField: field)
+            }
             if let (data, response) = try? await URLSession.shared.data(for: request),
                let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode,
                let decoded = try? JSONDecoder().decode(CameraFeedStatus.self, from: data) {

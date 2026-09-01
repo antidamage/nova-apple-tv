@@ -31,6 +31,10 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Nova TV connects to the local Nova dashboard service to control the home.</string>
+	<key>NovaCameraBaseURL</key>
+	<string>$(NOVA_CAMERA_BASE_URL)</string>
+	<key>NovaCameraToken</key>
+	<string>$(NOVA_CAMERA_TOKEN)</string>
 	<key>NSAppleMusicUsageDescription</key>
 	<string>Phonoscope uses the currently playing Apple Music track and playback position to synchronize its visual effects.</string>
 	<key>UIAppFonts</key>
