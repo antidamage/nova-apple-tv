@@ -29,6 +29,24 @@ enum AppConfig {
         Bundle.main.object(forInfoDictionaryKey: "NovaCameraBaseURL") as? String
     ).flatMap(URL.init(string:))
 
+    /// Bearer token for the standalone camera host's LAN proxy
+    /// (nocturnium-camera-proxy.py, see authentik/specs/authentik-sso.md
+    /// "Camera bypass contract"). Only meaningful alongside `cameraBaseURL` —
+    /// the dashboard's own same-origin `/api/camera` fallback needs no token,
+    /// it attaches its own server-side. Kept in the same private Info.plist
+    /// override as `cameraBaseURL`.
+    static let cameraToken: String? = (
+        Bundle.main.object(forInfoDictionaryKey: "NovaCameraToken") as? String
+    ).flatMap { $0.isEmpty ? nil : $0 }
+
+    /// HTTP headers to attach to any request against `cameraBaseURL` — empty
+    /// when no token is configured (public builds, or the dashboard-proxy
+    /// fallback, which needs none).
+    static var cameraHeaders: [String: String] {
+        guard let token = cameraToken else { return [:] }
+        return ["Authorization": "Bearer \(token)"]
+    }
+
     /// Build a camera resource URL, honouring `cameraBaseURL` when set and
     /// falling back to the dashboard's same-origin `/api/camera` route otherwise.
     static func cameraURL(cameraID: String, path: String) -> URL {
