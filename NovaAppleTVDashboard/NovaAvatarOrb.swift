@@ -22,10 +22,7 @@ struct NovaAvatarOrb: View {
     let watchface: WatchfacePreferences?
 
     var body: some View {
-        let resolved = OrbInfoCatalogue.resolve(store.state?.preferences?.orbInfo)
-        // A clock showing seconds has to tick every second; everything else is
-        // comfortable on the original 30s cadence.
-        let cadence: TimeInterval = resolved.display.clockSeconds ? 1 : 30
+        let cadence: TimeInterval = 1
 
         return TimelineView(.periodic(from: .now, by: cadence)) { timeline in
             GeometryReader { geometry in
@@ -39,11 +36,8 @@ struct NovaAvatarOrb: View {
                     power: power,
                     tasks: tasks
                 )
-                let readout = formatOrbValue(
-                    resolved.module.read(sources, resolved.params),
-                    resolved.display,
-                    label: resolved.module.label
-                )
+                let selection = OrbInfoCatalogue.resolveStack(store.state?.preferences?.orbInfo, events: store.orbEvents, sources: sources)
+                let readout = selection.readout
                 let gymAlert = readout.alert
                 let speechCentered = speech.phase == .speaking
                 let speechActive = speech.phase != .idle
@@ -71,7 +65,20 @@ struct NovaAvatarOrb: View {
                     }
 
                     if !readout.text.isEmpty {
-                        Text(readout.text)
+                        VStack(spacing: 4) {
+                            if let icon = selection.event?.icon {
+                                ZStack {
+                                    if icon.hasPrefix("text:") { Text(String(icon.dropFirst(5))).font(.novaMono(32)) }
+                                    else { Image(systemName: orbEventSymbol(icon)).font(.system(size: 32, weight: .bold)) }
+                                    if let fraction = selection.event?.countdownFraction {
+                                        Circle().trim(from: 0, to: max(0, min(1, fraction)))
+                                            .stroke(theme.avatar.gradientAlert.color, lineWidth: 3)
+                                            .rotationEffect(.degrees(-90))
+                                    }
+                                }.frame(width: 60, height: 60)
+                            }
+                            Text(readout.text).font(.novaMono(selection.event == nil ? 52 : 26))
+                        }
                             .font(.novaMono(52))
                             .monospacedDigit()
                             .foregroundStyle(
@@ -85,6 +92,8 @@ struct NovaAvatarOrb: View {
                             .accessibilityLabel(readout.accessibilityLabel)
                     }
                 }
+                .focusable(selection.event?.dismiss != nil)
+                .onTapGesture { if let dismiss = selection.event?.dismiss { Task { await store.dismissOrbEvent(dismiss) } } }
                 .scaleEffect(speechCentered ? speechScale : 1)
                 .offset(
                     x: speechCentered ? speechOffset.width : 0,
@@ -98,5 +107,20 @@ struct NovaAvatarOrb: View {
             }
         }
         .accessibilityLabel(speech.phase == .idle ? "Nova status orb" : "Nova is speaking")
+    }
+}
+
+private func orbEventSymbol(_ icon: String) -> String {
+    switch icon {
+    case "washing-machine": return "washer"
+    case "barbell": return "dumbbell.fill"
+    case "umbrella": return "umbrella.fill"
+    case "lightning": return "bolt.fill"
+    case "spinner": return "arrow.triangle.2.circlepath"
+    case "egg": return "oval.portrait.fill"
+    case "coffee": return "cup.and.saucer.fill"
+    case "pill": return "pill.fill"
+    case "bell": return "bell.fill"
+    default: return "timer"
     }
 }

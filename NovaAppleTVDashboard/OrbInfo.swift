@@ -64,6 +64,10 @@ struct OrbModuleOutput {
     var alert: Bool = false
     var alertThreshold: Double?
     var detail: String?
+    /// False = the entry is `off` (not in the stack), e.g. gym before showAfterHours.
+    var active: Bool? = nil
+    /// Epoch ms the alert began; most recent alert orders first.
+    var alertAt: Double? = nil
 
     enum Status: String {
         case ok, stale, unavailable, error
@@ -86,10 +90,11 @@ struct OrbFormatResult {
 struct OrbInfoPayload: Decodable {
     var moduleID: String?
     var modules: [String: OrbModulePayload]?
+    var entries: [OrbStackEntryPayload]?
 
     enum CodingKeys: String, CodingKey {
         case moduleID = "moduleId"
-        case modules
+        case modules, entries
     }
 }
 
@@ -336,4 +341,103 @@ func formatOrbValue(
         alert: alert,
         accessibilityLabel: "\(label): \(spoken)." + (output.detail.map { " \($0)" } ?? "")
     )
+}
+
+struct OrbStackEntryPayload: Decodable {
+    var id: String
+    var moduleId: String
+    /// Round 2: user switch (default on). Legacy `activation` is migrated server-side.
+    var enabled: Bool?
+    var showOnlyWhenAlerting: Bool?
+    var activation: String?
+    var display: OrbInfoDisplayPayload?
+    var params: [String: OrbParamValue]?
+}
+struct OrbDismissPayload: Decodable { var kind: String; var id: String }
+struct OrbEventPayload: Decodable {
+    var active: Bool?
+    var icon: String?
+    var text: String?
+    var alert: Bool?
+    var countdownFraction: Double?
+    var dismiss: OrbDismissPayload?
+    var remainingMs: Double?
+    var alertAt: Double?
+}
+
+// MARK: - Stack ordering (mirrors lib/orb-info/stack.ts; shared stack-cases.json)
+
+struct OrbStackCandidate {
+    var id: String
+    var moduleId: String
+    var enabled: Bool = true
+    var showOnlyWhenAlerting: Bool = false
+    var active: Bool?
+    var alert: Bool = false
+    var remainingMs: Double?
+    var alertAt: Double?
+}
+
+enum OrbStackOrdering {
+    static let countdownModuleIDs: Set<String> = ["timer", "washing", "rain-arriving"]
+    /// Alerts that sink to the bottom of the stack instead of the top: a gym
+    /// alert is typically a week old and needs physical work to clear, so
+    /// anything else on the stack is more useful right now.
+    static let sinkingAlertModuleIDs: Set<String> = ["gym", "gym-progress"]
+
+    enum State: String { case off, on, alert, countdown }
+
+    static func state(_ candidate: OrbStackCandidate) -> State {
+        if !candidate.enabled { return .off }
+        if candidate.alert && candidate.active != false { return .alert }
+        if candidate.active == false { return .off }
+        if countdownModuleIDs.contains(candidate.moduleId) { return .countdown }
+        if candidate.showOnlyWhenAlerting { return .off }
+        return .on
+    }
+
+    /// Alerts (most recent first), then running countdowns (shortest remaining
+    /// first, overrun = 0), then `on` entries in user order, then sinking
+    /// (gym) alerts last. `off` never appears.
+    static func order(_ candidates: [OrbStackCandidate]) -> [OrbStackCandidate] {
+        var alerts: [(Int, OrbStackCandidate)] = []
+        var sinkingAlerts: [(Int, OrbStackCandidate)] = []
+        var countdowns: [(Int, OrbStackCandidate)] = []
+        var on: [OrbStackCandidate] = []
+        for (index, candidate) in candidates.enumerated() {
+            switch state(candidate) {
+            case .off: continue
+            case .alert:
+                if sinkingAlertModuleIDs.contains(candidate.moduleId) { sinkingAlerts.append((index, candidate)) }
+                else { alerts.append((index, candidate)) }
+            case .countdown: countdowns.append((index, candidate))
+            case .on: on.append(candidate)
+            }
+        }
+        let byRecency: ((Int, OrbStackCandidate), (Int, OrbStackCandidate)) -> Bool = { lhs, rhs in
+            let a = lhs.1.alertAt ?? 0, b = rhs.1.alertAt ?? 0
+            return a != b ? a > b : lhs.0 < rhs.0
+        }
+        alerts.sort(by: byRecency)
+        sinkingAlerts.sort(by: byRecency)
+        countdowns.sort { lhs, rhs in
+            let a = max(0, lhs.1.remainingMs ?? 0), b = max(0, rhs.1.remainingMs ?? 0)
+            return a != b ? a < b : lhs.0 < rhs.0
+        }
+        return alerts.map { $0.1 } + countdowns.map { $0.1 } + on + sinkingAlerts.map { $0.1 }
+    }
+}
+struct OrbTimerPayload: Decodable {
+    var id: String
+    var icon: String
+    var label: String
+    var durationMs: Double
+    var endsAt: Double
+    var completedAt: Double?
+    var dismissedAt: Double?
+}
+struct OrbEventsPayload: Decodable {
+    var entries: [OrbStackEntryPayload]
+    var outputs: [String: OrbEventPayload]
+    var timer: OrbTimerPayload?
 }

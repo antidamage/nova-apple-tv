@@ -77,13 +77,13 @@ struct TVDashboardView: View {
                     // Fetch the power/reminder feeds only while a readout that
                     // needs them is selected, so this client polls no more than
                     // the web dashboard does for the same setting.
-                    .onChange(of: store.state?.preferences?.orbInfo?.moduleID ?? "") { _, _ in
+                    .onChange(of: OrbInfoCatalogue.stackEntries(store.state?.preferences?.orbInfo).map { $0.id + $0.moduleId }.joined(separator: ",")) { _, _ in
                         activity.extraFeeds = OrbInfoCatalogue
-                            .resolve(store.state?.preferences?.orbInfo).module.extraSources
+                            .stackSources(store.state?.preferences?.orbInfo)
                     }
                     .onAppear {
                         activity.extraFeeds = OrbInfoCatalogue
-                            .resolve(store.state?.preferences?.orbInfo).module.extraSources
+                            .stackSources(store.state?.preferences?.orbInfo)
                     }
                     .frame(width: bandHeight * 0.6, height: bandHeight * 0.6)
                     .zIndex(speech.phase == .idle ? 0 : 4_000)

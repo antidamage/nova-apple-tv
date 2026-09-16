@@ -68,7 +68,10 @@ private func reading(_ value: Double?, _ baseUnit: OrbBaseUnit) -> OrbModuleOutp
     return OrbModuleOutput(value: value, baseUnit: baseUnit, status: .ok)
 }
 
-private func gymOutput(_ sources: OrbInfoSources) -> OrbModuleOutput {
+/// Gym is `off` until this many hours since the last session (web: GYM_SHOW_AFTER_HOURS).
+let gymShowAfterHoursDefault: Double = 24
+
+private func gymOutput(_ sources: OrbInfoSources, showAfterHours: Double = 0) -> OrbModuleOutput {
     let threshold = sources.gymAlertThresholdHours
     guard let reset = isoDate(sources.watchface?.gymLastResetAt) else {
         return OrbModuleOutput(baseUnit: .hours, status: .unavailable, alertThreshold: threshold)
@@ -82,7 +85,9 @@ private func gymOutput(_ sources: OrbInfoSources) -> OrbModuleOutput {
         observedAt: sources.watchface?.gymLastResetAt,
         status: .ok,
         alert: threshold.map { hours >= $0 } ?? false,
-        alertThreshold: threshold
+        alertThreshold: threshold,
+        active: hours < showAfterHours ? false : nil,
+        alertAt: threshold.flatMap { hours >= $0 ? reset.timeIntervalSince1970 * 1000 + $0 * 3_600_000 : nil }
     )
 }
 
@@ -163,13 +168,18 @@ enum OrbInfoCatalogue {
     static let defaultModuleID = "gym"
 
     static let modules: [OrbInfoModule] = [
+        OrbInfoModule(id: "washing", label: "Washing", baseUnit: .none, defaultDisplay: OrbInfoDisplay(format: .text), read: { _, _ in .empty }),
+        OrbInfoModule(id: "timer", label: "Timer", baseUnit: .none, defaultDisplay: OrbInfoDisplay(format: .text), read: { _, _ in .empty }),
+        OrbInfoModule(id: "rain-arriving", label: "Rain arriving", baseUnit: .none, defaultDisplay: OrbInfoDisplay(format: .text), read: { _, _ in .empty }),
+        OrbInfoModule(id: "power-high", label: "High power draw", baseUnit: .none, defaultDisplay: OrbInfoDisplay(format: .text), read: { _, _ in .empty }),
+        OrbInfoModule(id: "update-running", label: "Nova update running", baseUnit: .none, defaultDisplay: OrbInfoDisplay(format: .text), read: { _, _ in .empty }),
         OrbInfoModule(id: "none", label: "None", baseUnit: .none,
                       defaultDisplay: OrbInfoDisplay(format: .text, emptyText: ""),
                       read: { _, _ in OrbModuleOutput(baseUnit: .none, status: .unavailable) }),
 
         OrbInfoModule(id: "gym", label: "Gym", baseUnit: .hours,
                       defaultDisplay: OrbInfoDisplay(format: .duration, unit: .hours, decimals: 0, rounding: .floor),
-                      read: { sources, _ in gymOutput(sources) }),
+                      read: { sources, params in gymOutput(sources, showAfterHours: params.number("showAfterHours") ?? gymShowAfterHoursDefault) }),
 
         OrbInfoModule(id: "gym-progress", label: "Gym progress", baseUnit: .hours,
                       defaultDisplay: OrbInfoDisplay(format: .percent, decimals: 0, rounding: .floor,
@@ -416,6 +426,74 @@ enum OrbInfoCatalogue {
 
     static func module(id: String?) -> OrbInfoModule {
         byID[id ?? ""] ?? byID[defaultModuleID]!
+    }
+
+    static func stackEntries(_ payload: OrbInfoPayload?) -> [OrbStackEntryPayload] {
+        if let entries = payload?.entries { return entries }
+        let id = module(id: payload?.moduleID).id
+        let saved = payload?.modules?[id]
+        return [OrbStackEntryPayload(id: "legacy-" + id, moduleId: id, enabled: true, showOnlyWhenAlerting: nil, activation: nil, display: saved?.display, params: saved?.params)]
+    }
+    static func stackSources(_ payload: OrbInfoPayload?) -> Set<OrbSourceID> {
+        Set(stackEntries(payload).flatMap { module(id: $0.moduleId).extraSources })
+    }
+    /// First-seen times for alerts whose module carries no timestamp of its own
+    /// (a threshold crossing). The web client keeps the same map in
+    /// `useOrbInfo`, so recency still orders those alerts on both surfaces.
+    private static var alertFirstSeen: [String: Double] = [:]
+
+    /// The ordered stack's first entry (Round 2 ordering; display only, no dial on tvOS).
+    static func resolveStack(_ payload: OrbInfoPayload?, events: OrbEventsPayload?, sources: OrbInfoSources)
+      -> (readout: OrbFormatResult, event: OrbEventPayload?) {
+        var readouts: [String: (readout: OrbFormatResult, event: OrbEventPayload?)] = [:]
+        var candidates: [OrbStackCandidate] = []
+        let nowMs = sources.now.timeIntervalSince1970 * 1000
+        for entry in stackEntries(payload) {
+            let legacyAlertOnly = entry.activation == "whenAlerting"
+            var candidate = OrbStackCandidate(id: entry.id, moduleId: entry.moduleId, enabled: entry.enabled ?? true,
+                                              showOnlyWhenAlerting: entry.showOnlyWhenAlerting ?? legacyAlertOnly)
+            if ["timer", "washing", "rain-arriving", "power-high", "update-running"].contains(entry.moduleId) {
+                guard var event = events?.outputs[entry.id] else { continue }
+                if entry.moduleId == "timer", let timer = events?.timer, timer.dismissedAt == nil {
+                    let remaining = max(0, timer.endsAt - nowMs)
+                    let done = timer.completedAt != nil || remaining == 0
+                    let seconds = Int(ceil(remaining / 1000))
+                    event.active = true
+                    event.text = done ? "Done" : String(format: "%d:%02d", seconds / 60, seconds % 60)
+                    event.countdownFraction = done ? nil : remaining / max(1, timer.durationMs)
+                    event.alert = done
+                    event.remainingMs = remaining
+                    event.alertAt = done ? (timer.completedAt ?? timer.endsAt) : nil
+                    event.dismiss = done ? OrbDismissPayload(kind: "timer", id: timer.id) : nil
+                }
+                candidate.active = event.active ?? false
+                candidate.alert = event.alert == true
+                candidate.remainingMs = event.remainingMs
+                candidate.alertAt = event.alertAt
+                readouts[entry.id] = (OrbFormatResult(text: event.text ?? "", alert: event.alert == true, accessibilityLabel: entry.moduleId + " " + (event.text ?? "")), event)
+            } else {
+                let module = module(id: entry.moduleId)
+                let output = module.read(sources, OrbModuleParams(entry.params ?? [:]))
+                candidate.active = output.active
+                candidate.alert = output.alert
+                candidate.alertAt = output.alertAt
+                let display = entry.display?.resolved(onto: module.defaultDisplay) ?? module.defaultDisplay
+                let icon: OrbEventPayload? = entry.moduleId == "gym" && output.value != nil ? OrbEventPayload(icon: "barbell") : nil
+                readouts[entry.id] = (formatOrbValue(output, display, label: module.label), icon)
+            }
+            if OrbStackOrdering.state(candidate) == .alert {
+                if candidate.alertAt == nil {
+                    let seen = alertFirstSeen[candidate.id] ?? nowMs
+                    alertFirstSeen[candidate.id] = seen
+                    candidate.alertAt = seen
+                }
+            } else {
+                alertFirstSeen[candidate.id] = nil
+            }
+            candidates.append(candidate)
+        }
+        if let first = OrbStackOrdering.order(candidates).first, let readout = readouts[first.id] { return readout }
+        return (OrbFormatResult(text: "", alert: false, accessibilityLabel: "Status orb"), nil)
     }
 
     /// The module, display and parameters for the current dashboard payload.

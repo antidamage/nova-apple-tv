@@ -3,6 +3,8 @@ import SwiftUI
 
 @MainActor
 final class DashboardStore: ObservableObject {
+    @Published var orbEvents: OrbEventsPayload?
+    private var orbEventsTask: Task<Void, Never>?
     @Published var state: DashboardState?
     @Published var theme = DashboardTheme.default
     @Published private(set) var followVisualizerWhenActive = false
@@ -51,6 +53,12 @@ final class DashboardStore: ObservableObject {
                 try? await Task.sleep(for: .seconds(5))
             }
         }
+        orbEventsTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refreshOrbEvents()
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
         // Orb modules change rarely (a JSON drop on the host), so they poll
         // on their own slow cadence — matching the web client's 5 minutes.
         orbModulesTask = Task { [weak self] in
@@ -66,6 +74,22 @@ final class DashboardStore: ObservableObject {
     /// always has something to render.
     func orbModule(id: String?) -> OrbModule? {
         OrbModuleCatalog.resolve(id: id, fetched: orbModules)
+    }
+
+    func refreshOrbEvents() async {
+        do {
+            let (data, response) = try await get(path: "api/orb-info/events")
+            try validate(response: response, data: data)
+            orbEvents = try decoder.decode(OrbEventsPayload.self, from: data)
+        } catch { /* Retain the last snapshot through a short connection gap. */ }
+    }
+    func dismissOrbEvent(_ target: OrbDismissPayload) async {
+        do {
+            let path = target.kind == "timer" ? "api/orb-timer" : "api/tasks/\(target.id)/dismiss"
+            let (data, response) = try await post(path: path, body: target.kind == "timer" ? ["command": "dismiss", "id": target.id] : [:])
+            try validate(response: response, data: data)
+            await refreshOrbEvents()
+        } catch { errorMessage = error.localizedDescription }
     }
 
     func refreshOrbModules() async {

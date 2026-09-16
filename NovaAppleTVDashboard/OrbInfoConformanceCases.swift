@@ -212,4 +212,61 @@ enum OrbInfoConformanceCases {
   ]
 }
 """#
+
+    /// Stack ordering table (lib/orb-info/stack-cases.json, run by stack.test.ts).
+    static let stackJson = #"""
+{
+  "comment": "Shared conformance table for orderOrbStack. BOTH lib/orb-info/stack.test.ts and the Apple TV ParitySelfTests run it. Outputs omit fields that are absent; entries default to enabled.",
+  "cases": [
+    {
+      "name": "alert beats countdown beats on",
+      "entries": [{ "id": "clock", "moduleId": "clock" }, { "id": "timer", "moduleId": "timer" }, { "id": "lan", "moduleId": "wan-status" }],
+      "outputs": { "clock": {}, "timer": { "active": true, "remainingMs": 60000 }, "lan": { "alert": true } },
+      "expectOrder": ["lan", "timer", "clock"]
+    },
+    {
+      "name": "two countdowns order by remaining, overrun counts as zero",
+      "entries": [{ "id": "timer", "moduleId": "timer" }, { "id": "rain", "moduleId": "rain-arriving" }, { "id": "wash", "moduleId": "washing" }],
+      "outputs": { "timer": { "active": true, "remainingMs": 300000 }, "rain": { "active": true, "remainingMs": 120000 }, "wash": { "active": true, "remainingMs": -7000 } },
+      "expectOrder": ["wash", "rain", "timer"]
+    },
+    {
+      "name": "off never appears: disabled, inactive and quiet alert-only rows",
+      "entries": [{ "id": "a", "moduleId": "clock", "enabled": false }, { "id": "b", "moduleId": "timer" }, { "id": "c", "moduleId": "openings-open", "showOnlyWhenAlerting": true }, { "id": "d", "moduleId": "lights-on" }],
+      "outputs": { "a": {}, "b": { "active": false }, "c": { "alert": false }, "d": {} },
+      "expectOrder": ["d"]
+    },
+    {
+      "name": "alerts order most recent first; a finished timer is an alert",
+      "entries": [{ "id": "timer", "moduleId": "timer" }, { "id": "wash", "moduleId": "washing" }, { "id": "open", "moduleId": "openings-open", "showOnlyWhenAlerting": true }],
+      "outputs": { "timer": { "active": true, "alert": true, "alertAt": 1000 }, "wash": { "active": true, "alert": true, "alertAt": 3000 }, "open": { "alert": true, "alertAt": 2000 } },
+      "expectOrder": ["wash", "open", "timer"]
+    },
+    {
+      "name": "on entries keep user order",
+      "entries": [{ "id": "z", "moduleId": "lights-on" }, { "id": "y", "moduleId": "clock" }, { "id": "x", "moduleId": "gym" }],
+      "outputs": { "z": {}, "y": {}, "x": {} },
+      "expectOrder": ["z", "y", "x"]
+    },
+    {
+      "name": "gym alert sinks below everything, even plain on rows",
+      "entries": [{ "id": "gym", "moduleId": "gym" }, { "id": "timer", "moduleId": "timer" }, { "id": "clock", "moduleId": "clock" }],
+      "outputs": { "gym": { "alert": true, "alertAt": 9000 }, "timer": { "active": true, "remainingMs": 60000 }, "clock": {} },
+      "expectOrder": ["timer", "clock", "gym"]
+    },
+    {
+      "name": "gym alerts sink together, most recent of them first",
+      "entries": [{ "id": "gym", "moduleId": "gym" }, { "id": "gymp", "moduleId": "gym-progress" }, { "id": "lan", "moduleId": "wan-status" }],
+      "outputs": { "gym": { "alert": true, "alertAt": 1000 }, "gymp": { "alert": true, "alertAt": 2000 }, "lan": { "alert": true, "alertAt": 500 } },
+      "expectOrder": ["lan", "gymp", "gym"]
+    },
+    {
+      "name": "gym is off before showAfterHours",
+      "entries": [{ "id": "gym", "moduleId": "gym" }, { "id": "clock", "moduleId": "clock" }],
+      "outputs": { "gym": { "active": false }, "clock": {} },
+      "expectOrder": ["clock"]
+    }
+  ]
+}
+"""#
 }
