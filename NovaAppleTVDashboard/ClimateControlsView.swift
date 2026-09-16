@@ -161,6 +161,13 @@ struct AirConditionerPanel: View {
                                 .frame(width: climateButtonSize, height: climateButtonSize)
                             ClimateModeButton(zoneID: zoneID, entity: aircon, mode: "fan_only", label: "FAN", symbol: "fan.fill", focus: focus, preferences: preferences)
                                 .frame(width: climateButtonSize, height: climateButtonSize)
+                            // Dry only where the unit has it natively (web parity:
+                            // specs/temperature-encoder.md round 2). Emulated Dry
+                            // needs the server's dryEmulatable flag, not read here.
+                            if aircon.hvacModes.contains("dry") {
+                                ClimateModeButton(zoneID: zoneID, entity: aircon, mode: "dry", label: "DRY", symbol: "drop.fill", focus: focus, preferences: preferences)
+                                    .frame(width: climateButtonSize, height: climateButtonSize)
+                            }
                             ClimateModeButton(zoneID: zoneID, entity: aircon, mode: "cool", label: "COOLING", symbol: "snowflake", focus: focus, preferences: preferences)
                                 .frame(width: climateButtonSize, height: climateButtonSize)
                         }
@@ -805,11 +812,11 @@ private func airconFanServiceValue(_ step: String) -> String {
 /// if the unit supports it, else the current mode, else the first real mode.
 private func preferredManualMode(entity: DashboardEntity, preferred: String? = nil) -> String {
     if let preferred,
-       ["heat", "cool", "fan_only"].contains(preferred),
+       ["heat", "cool", "dry", "fan_only"].contains(preferred),
        entity.hvacModes.isEmpty || entity.hvacModes.contains(preferred) {
         return preferred
     }
-    if ["heat", "cool", "fan_only"].contains(entity.state) {
+    if ["heat", "cool", "dry", "fan_only"].contains(entity.state) {
         return entity.state
     }
     return entity.hvacModes.first { !["off", "unavailable", "unknown", "auto"].contains($0) } ?? "heat"

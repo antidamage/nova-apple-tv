@@ -453,9 +453,9 @@ func climateFocusRows(zone: DashboardZone) -> [[DashboardFocus]] {
             .action(zone.id, "aircon-off")
         ])
 
-        // Visual order: HEAT (top), FAN, COOL (bottom).
-        let modeRow = ["heat", "fan_only", "cool"]
-            .filter { aircon.hvacModes.isEmpty || aircon.hvacModes.contains($0) }
+        // Visual order: HEAT (top), FAN, DRY (native only), COOL (bottom).
+        let modeRow = ["heat", "fan_only", "dry", "cool"]
+            .filter { $0 == "dry" ? aircon.hvacModes.contains("dry") : (aircon.hvacModes.isEmpty || aircon.hvacModes.contains($0)) }
             .map { DashboardFocus.action(zone.id, "mode-\($0)") }
         rows.append(modeRow)
 

@@ -11,6 +11,7 @@ enum ParitySelfTests {
         testThemeDecoding()
         testOrbContract()
         testOrbInfoFormatConformance()
+        testOrbStackOrderingConformance()
         testSpeechEnvelope()
         testPhonoscopeQualityPolicy()
         testFluidBackgroundPolicy()
@@ -1283,6 +1284,31 @@ enum ParitySelfTests {
     /// Runs the SAME conformance table as the web dashboard's
     /// `lib/orb-info/format.test.ts`. A failure here means the status orb would
     /// read one way on the dashboard and another on the Apple TV.
+    private static func testOrbStackOrderingConformance() {
+        struct CaseFile: Decodable {
+            struct Entry: Decodable { let id: String; let moduleId: String; let enabled: Bool?; let showOnlyWhenAlerting: Bool? }
+            struct Output: Decodable { let active: Bool?; let alert: Bool?; let remainingMs: Double?; let alertAt: Double? }
+            struct Case: Decodable { let name: String; let entries: [Entry]; let outputs: [String: Output]; let expectOrder: [String] }
+            let cases: [Case]
+        }
+        guard let data = OrbInfoConformanceCases.stackJson.data(using: .utf8),
+              let file = try? JSONDecoder().decode(CaseFile.self, from: data) else {
+            assertionFailure("orb stack conformance table failed to decode")
+            return
+        }
+        assert(!file.cases.isEmpty)
+        for row in file.cases {
+            let candidates = row.entries.compactMap { entry -> OrbStackCandidate? in
+                guard let output = row.outputs[entry.id] else { return nil }
+                return OrbStackCandidate(id: entry.id, moduleId: entry.moduleId, enabled: entry.enabled ?? true,
+                                         showOnlyWhenAlerting: entry.showOnlyWhenAlerting ?? false, active: output.active,
+                                         alert: output.alert ?? false, remainingMs: output.remainingMs, alertAt: output.alertAt)
+            }
+            let order = OrbStackOrdering.order(candidates).map { $0.id }
+            assert(order == row.expectOrder, "orb stack case '\(row.name)': expected \(row.expectOrder), got \(order)")
+        }
+    }
+
     private static func testOrbInfoFormatConformance() {
         struct CaseFile: Decodable {
             struct Entry: Decodable {

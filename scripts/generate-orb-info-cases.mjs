@@ -14,7 +14,8 @@ const source = path.resolve(here, "../../nova-ha-dashboard/lib/orb-info/format-c
 const target = path.resolve(here, "../NovaAppleTVDashboard/OrbInfoConformanceCases.swift");
 
 const json = readFileSync(source, "utf8");
-if (json.includes('"""')) {
+const stackJson = readFileSync(path.resolve(here, "../../nova-ha-dashboard/lib/orb-info/stack-cases.json"), "utf8");
+if (json.includes('"""') || stackJson.includes('"""')) {
   throw new Error("Case table contains a Swift raw-string terminator; escape it before embedding.");
 }
 
@@ -31,6 +32,11 @@ writeFileSync(target, `// GENERATED FILE — do not edit by hand.
 enum OrbInfoConformanceCases {
     static let json = #"""
 ${json.trimEnd()}
+"""#
+
+    /// Stack ordering table (lib/orb-info/stack-cases.json, run by stack.test.ts).
+    static let stackJson = #"""
+${stackJson.trimEnd()}
 """#
 }
 `, "utf8");
