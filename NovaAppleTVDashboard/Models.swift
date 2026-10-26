@@ -10,6 +10,7 @@ struct DashboardState: Decodable {
     let sun: SunStatus?
     let weather: WeatherStatus?
     let preferences: DashboardPreferences?
+    let climateControl: ClimateControlState?
     let warnings: [String]
 
     var primaryZones: [DashboardZone] {
@@ -81,6 +82,9 @@ struct DashboardZone: Decodable, Identifiable {
     let counts: DomainCounts
     let isOn: Bool
     let brightnessPct: Double
+    /// HA-native area sensor bindings for this zone's room, when set. Read by
+    /// the zone-parameterised status orb readouts (OrbInfoModules.swift).
+    let environment: ZoneEnvironment?
 
     var lightCount: Int { counts.light ?? lightingEntities.count }
     var switchCount: Int { counts.switch ?? 0 }
@@ -136,6 +140,16 @@ struct DomainCounts: Decodable {
             guard let count, count > 0 else { return nil }
             return "\(count) \(label)"
         }
+    }
+}
+
+struct ZoneEnvironment: Decodable {
+    let temperatureEntityID: String?
+    let humidityEntityID: String?
+
+    enum CodingKeys: String, CodingKey {
+        case temperatureEntityID = "temperatureEntityId"
+        case humidityEntityID = "humidityEntityId"
     }
 }
 
@@ -276,17 +290,50 @@ struct SunStatus: Decodable {
 }
 
 struct DashboardPreferences: Decodable {
+    var bedroomHeater: HeaterEncoderPreferences? = nil
     let aircon: AirconPreferences?
     let watchface: WatchfacePreferences?
+    /// Which status orb readout module is selected, and how it is displayed.
+    /// Shared with the web dashboard (see OrbInfo.swift); absent on payloads
+    /// from a dashboard predating the modules, which falls back to the gym
+    /// counter at its original display.
+    let orbInfo: OrbInfoPayload?
+    /// The household's climate knob range in °C (the web's "Knob range");
+    /// absent means each knob's own limits.
+    var climateTargetRange: TemperatureRange? = nil
+}
+
+struct TemperatureRange: Decodable {
+    let min: Double
+    let max: Double
 }
 
 struct AirconPreferences: Decodable {
+    var offTimerEndsAt: String? = nil
     let autoMode: Bool?
     let hvacMode: String?
     let temperature: Double?
     let fanMode: String?
     let quietMode: Bool?
     let turboMode: Bool?
+}
+
+struct ClimateControlState: Decodable {
+    let lounge: ClimateControlRoomState
+    let bedroom: ClimateControlRoomState
+}
+
+struct ClimateControlRoomState: Decodable {
+    let owner: String
+    let mode: String
+    let phase: String
+    let direction: String?
+    let sensorAvailable: Bool
+    let sensorReportedAt: String?
+    let sensorGraceEndsAt: String?
+    let actuatorAvailable: Bool
+    let overrideReason: String?
+    let lastStopReason: String?
 }
 
 struct WatchfacePreferences: Decodable {
@@ -298,6 +345,27 @@ struct WatchfacePreferences: Decodable {
 struct SpectrumCursor: Codable, Equatable {
     var x: Double
     var y: Double
+}
+
+/// The slice of `/api/power` the status orb readouts need.
+struct PowerSnapshot: Decodable {
+    let currentWatts: Double?
+    let currentCostPerHourNzd: Double?
+    let generatedAt: String?
+}
+
+/// The slice of `/api/tasks?command=list` the reminder readouts need.
+struct TaskSummary: Decodable {
+    var alertDismissedFor: String? = nil
+    var end: String? = nil
+    var moduleData: [String: JSONValue]? = nil
+    let id: String
+    let start: String
+    let dismissedAt: String?
+}
+
+struct TaskListPayload: Decodable {
+    let tasks: [TaskSummary]
 }
 
 struct NovaLoad: Decodable {

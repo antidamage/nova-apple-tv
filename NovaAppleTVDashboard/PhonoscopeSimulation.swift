@@ -2,15 +2,80 @@ import Foundation
 import QuartzCore
 import simd
 
+/// Stable per-module seed shared with the GPU renderer's `moduleSeed`.
+/// Deterministic across processes, unlike `String.hashValue`.
+func phonoscopeModuleSeed(_ moduleID: String) -> UInt64 {
+    moduleID.utf8.reduce(1_469_598_103_934_665_603) { ($0 ^ UInt64($1)) &* 1_099_511_628_211 }
+}
+
+/// Largest dot the renderer will draw, an order of magnitude above the module's
+/// declared 50px so a corrupt setting cannot allocate a screen-filling quad per
+/// entity. Mirrors `kMaxDotSizePixels` in `core/effect_scale.h`.
+let phonoscopeMaxDotSizePixels: Float = 200
+
+/// Dot diameter in true device pixels, as a clip-space radius.
+///
+/// Mirrors `nova::dotSizeClip`. It deliberately does NOT go through the 1080p
+/// `effectScale` every soft effect uses: those are authored at 1080 lines and
+/// multiplied by the ratio so their weight stays constant, while a dot is
+/// divided by the height because it is an object with a size. 50px is 50 real
+/// pixels at 1080p and 50 real pixels at 4K. See
+/// `nova-visualiser-modules/specs/particle-grid-dot-size.md`.
+///
+/// The divide is exact because the vertex shader's local space is
+/// `corner * effectScale` and its quad offset `corner * size * effectScale`, so
+/// the fragment shader's `|local| = 1` core edge sits at a clip radius of
+/// exactly `size`, and clip Y spans `outputHeight` pixels.
+func phonoscopeDotSizeClip(_ dotSizePixels: Float, outputHeight: Float) -> Float {
+    max(0, min(phonoscopeMaxDotSizePixels, dotSizePixels)) / max(1, outputHeight)
+}
+
+private func phonoscopePaletteSlots(in expression: String) -> [String] {
+    let parts = expression.components(
+        separatedBy: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_")).inverted
+    )
+    return parts.enumerated().compactMap { index, component in
+        guard component == "palette", index + 1 < parts.count, !parts[index + 1].isEmpty else { return nil }
+        return parts[index + 1]
+    }
+}
+
 struct PhonoscopePalette: Equatable {
-    let accent: SIMD4<Float>
-    let highlight: SIMD4<Float>
-    let background: SIMD4<Float>
+    let colors: [String: SIMD4<Float>]
+
+    var accent: SIMD4<Float> { color("primary", fallback: SIMD4(0.45, 0.45, 0.45, 1)) }
+    var highlight: SIMD4<Float> { color("secondary", fallback: SIMD4(0.85, 0.85, 0.85, 1)) }
+    var background: SIMD4<Float> { color("backgroundPrimary", fallback: color("background", fallback: SIMD4(0, 0, 0, 1))) }
+
+    func color(_ id: String, fallback: SIMD4<Float>? = nil) -> SIMD4<Float> {
+        if let value = colors[id] { return value }
+        if id == "accent", let value = colors["primary"] { return value }
+        if id == "highlight", let value = colors["secondary"] { return value }
+        return fallback ?? accent
+    }
+
+    func approached(toward target: PhonoscopePalette, amount rawAmount: Double) -> PhonoscopePalette {
+        let amount = Float(min(1, max(0, rawAmount)))
+        let keys = Set(colors.keys).union(target.colors.keys)
+        return PhonoscopePalette(colors: Dictionary(uniqueKeysWithValues: keys.map { key in
+            let current = colors[key]
+                ?? target.colors[key].map { SIMD4($0.x, $0.y, $0.z, 0) }
+                ?? .zero
+            let destination = target.colors[key]
+                ?? SIMD4(current.x, current.y, current.z, 0)
+            return (key, simd_mix(current, destination, SIMD4<Float>(repeating: amount)))
+        }))
+    }
 
     static let `default` = PhonoscopePalette(
-        accent: SIMD4(0.45, 0.45, 0.45, 1),
-        highlight: SIMD4(0.85, 0.85, 0.85, 1),
-        background: SIMD4(0, 0, 0, 1)
+        colors: [
+            "primary": SIMD4(0.45, 0.45, 0.45, 1),
+            "secondary": SIMD4(0.85, 0.85, 0.85, 1),
+            "tertiary": SIMD4(0.65, 0.65, 0.65, 1),
+            "background": SIMD4(0, 0, 0, 1),
+            "backgroundPrimary": SIMD4(0, 0, 0, 1),
+            "backgroundSecondary": SIMD4(0.05, 0.07, 0.11, 1),
+        ]
     )
 }
 
@@ -34,6 +99,12 @@ private struct PhonoscopeSimEntity {
     var material: Float = 0
     var color = SIMD4<Float>(0.22, 0.72, 1, 0.8)
     var usesThemePalette = false
+    var paletteStartSlot = "primary"
+    var paletteEndSlot = "primary"
+    var paletteGlowStartSlot = "primary"
+    var paletteGlowEndSlot = "primary"
+    var paletteTrailStartSlot = "primary"
+    var paletteTrailEndSlot = "primary"
     var usesAnalyticWave = false
     var waveOffset = SIMD3<Float>.zero
     var waveTarget: Float = 0
@@ -52,7 +123,36 @@ private struct PhonoscopeFieldRange {
     let depth: Int
     let topology: String
     let spacing: Float
+    let wireframe: PhonoscopeJSONValue?
+    let lineStartSlot: String
+    let lineEndSlot: String
     let radialBeatWave: PhonoscopeFieldWaveSource?
+
+    // Extent gating. A field that declares `extentX`/`extentY` is allocated at
+    // its full 100% size and gated down to a centred sub-rectangle every tick,
+    // because extent is a driven parameter and a driven parameter must never
+    // trigger a structural rebuild. Fields declaring neither leave these at the
+    // allocated size, which is the same thing as no gating.
+    var gated = false
+    var extentX: PhonoscopeJSONValue?
+    var extentY: PhonoscopeJSONValue?
+    var liveColumns = 1
+    var liveRows = 1
+    // Index of the first live column/row. Always `(allocated - live) / 2`
+    // exactly: `live` is snapped to the allocated count's parity so the
+    // sub-rectangle is centred on a whole cell rather than sliding half a gap
+    // as the extent sweeps.
+    var columnBegin = 0
+    var rowBegin = 0
+
+    /// Whether an allocated cell is inside the live sub-rectangle. Dead cells
+    /// are not integrated, receive no effects and emit no particles, so the
+    /// running cost tracks the live extent even though allocation is worst-case.
+    func cellIsLive(_ x: Int, _ y: Int) -> Bool {
+        guard gated else { return true }
+        return x >= columnBegin && x < columnBegin + liveColumns
+            && y >= rowBegin && y < rowBegin + liveRows
+    }
 }
 
 private struct PhonoscopeFieldWaveSource {
@@ -99,6 +199,29 @@ private struct PhonoscopeEmitter {
     var emitted: Int
 }
 
+func phonoscopeChaseAmount(delta: Double, settlingDuration: Double) -> Double {
+    guard settlingDuration > 0 else { return 1 }
+    // Three time constants settle to roughly 95%. Unlike a fixed endpoint
+    // tween, this response can be retargeted every frame without a jump.
+    return 1 - exp(-3 * max(0, delta) / settlingDuration)
+}
+
+enum PhonoscopeSettingInterpolationAction: Equatable {
+    case hold
+    case applyImmediately
+    case transition
+}
+
+func phonoscopeSettingInterpolationAction(
+    targetChanged: Bool,
+    wasDriverInterpolated: Bool,
+    isDriverInterpolated: Bool
+) -> PhonoscopeSettingInterpolationAction {
+    if isDriverInterpolated { return .applyImmediately }
+    if targetChanged || wasDriverInterpolated { return .transition }
+    return .hold
+}
+
 /// Fixed-rate, deliberately approximate scene simulation. It owns a dedicated
 /// serial queue, ingests immutable signal/module snapshots, and publishes the
 /// latest complete render snapshot without ever blocking Metal's draw callback.
@@ -111,16 +234,36 @@ final class PhonoscopeSimulation {
     private var pendingModule: PhonoscopeModule?
     private var pendingSignal = PhonoscopeSignalFrame.idle
     private var pendingSettings: [String: Double] = [:]
+    private var pendingDriverInterpolatedSettings: Set<String> = []
     private var pendingPalette = PhonoscopePalette.default
+    private var pendingTransitionDuration: Double = 0.6
+    private var pendingTransitionPaused = false
+    private var pendingReloadGeneration = 0
+    private var pendingOutputHeight: Float = 1080
     private var pendingModuleKey = ""
 
     private var module: PhonoscopeModule?
     private var signal = PhonoscopeSignalFrame.idle
     private var settings: [String: Double] = [:]
     private var palette = PhonoscopePalette.default
+    private var targetPalette = PhonoscopePalette.default
+    private var targetSettings: [String: Double] = [:]
+    private var driverInterpolatedSettings: Set<String> = []
+    private var transitionDuration: Double = 0.6
+    private var transitionPaused = false
+    private var reloadGeneration = 0
+    // Presentation height in pixels, the divisor for a module's
+    // `render.dotSizePixels`. Mirrors `Simulation::outputHeight_`.
+    private var outputHeight: Float = 1080
     private var moduleKey = ""
     private var entities: [PhonoscopeSimEntity] = []
     private var fields: [PhonoscopeFieldRange] = []
+    // Parallel to `entities`: true while the entity is inside its field's live
+    // extent. Recomputed by `applyFieldExtents` rather than derived per read,
+    // because integrate, effect propagation and publish all consult it per
+    // entity per tick. Entities outside any gated field — beat-emitted
+    // particles, every ungated module — are permanently true.
+    private var entityLive: [Bool] = []
     private var fieldWaves: [PhonoscopeFieldWave] = []
     private var visitedTokens: [UInt64] = []
     private var effectQueue: [PhonoscopeEffectDelivery] = []
@@ -151,14 +294,38 @@ final class PhonoscopeSimulation {
         module: PhonoscopeModule?,
         signal: PhonoscopeSignalFrame,
         settings: [String: Double],
-        palette: PhonoscopePalette
+        driverInterpolatedSettings: Set<String>,
+        palette: PhonoscopePalette,
+        transitionDuration: Double,
+        transitionPaused: Bool,
+        reloadGeneration: Int
     ) {
         inputLock.lock()
         pendingModule = module
         pendingSignal = signal
         pendingSettings = settings
+        pendingDriverInterpolatedSettings = driverInterpolatedSettings
         pendingPalette = palette
+        pendingTransitionDuration = max(0, min(600, transitionDuration))
+        pendingTransitionPaused = transitionPaused
+        pendingReloadGeneration = reloadGeneration
         pendingModuleKey = module.map { "\($0.id)@\($0.version)" } ?? ""
+        inputLock.unlock()
+    }
+
+    /// The height in pixels of the picture the viewer sees. A module's
+    /// `render.dotSizePixels` is in real device pixels, so this is the divisor
+    /// that turns it into clip space.
+    ///
+    /// Deliberately the PRESENTATION height and not `MTKView.drawableSize.height`:
+    /// the renderer adapts `renderScale` between 0.65 and 1 under load and
+    /// upscales the result to the panel, so a dot tied to the drawable would
+    /// visibly shrink whenever the frame rate dipped and grow back when it
+    /// recovered. Separate from `update(...)` because it changes on a completely
+    /// different cadence — a layout event, not a config publish.
+    func setOutputHeight(_ height: Float) {
+        inputLock.lock()
+        pendingOutputHeight = max(1, min(16384, height))
         inputLock.unlock()
     }
 
@@ -173,15 +340,48 @@ final class PhonoscopeSimulation {
         let nextModule = pendingModule
         let nextSignal = pendingSignal
         let nextSettings = pendingSettings
+        let nextDriverInterpolatedSettings = pendingDriverInterpolatedSettings
         let nextPalette = pendingPalette
+        let nextTransitionDuration = pendingTransitionDuration
+        let nextTransitionPaused = pendingTransitionPaused
+        let nextReloadGeneration = pendingReloadGeneration
+        let nextOutputHeight = pendingOutputHeight
         let nextKey = pendingModuleKey
         inputLock.unlock()
-        let requiresRebuild = nextKey != moduleKey || nextSettings != settings || nextPalette != palette
+        // Not chased toward like the settings below: a resolution change is a
+        // cut, and easing a dot through the intermediate sizes reads as a glitch.
+        outputHeight = nextOutputHeight
+        let requiresRebuild = nextKey != moduleKey || nextReloadGeneration != reloadGeneration
+        if !requiresRebuild {
+            for (key, target) in nextSettings {
+                let action = phonoscopeSettingInterpolationAction(
+                    targetChanged: targetSettings[key] != target,
+                    wasDriverInterpolated: driverInterpolatedSettings.contains(key),
+                    isDriverInterpolated: nextDriverInterpolatedSettings.contains(key)
+                )
+                if action == .applyImmediately {
+                    settings[key] = target
+                } else if settings[key] == nil {
+                    settings[key] = target
+                }
+            }
+            for key in Array(settings.keys) where nextSettings[key] == nil {
+                settings.removeValue(forKey: key)
+            }
+        }
+        targetSettings = nextSettings
+        driverInterpolatedSettings = nextDriverInterpolatedSettings
+        targetPalette = nextPalette
+        transitionDuration = nextTransitionDuration
+        transitionPaused = nextTransitionPaused
         moduleKey = nextKey
         module = nextModule
-        settings = nextSettings
-        palette = nextPalette
+        reloadGeneration = nextReloadGeneration
         if requiresRebuild {
+            settings = nextSettings
+            targetSettings = nextSettings
+            driverInterpolatedSettings = nextDriverInterpolatedSettings
+            targetPalette = nextPalette
             rebuild()
         }
         signal = nextSignal
@@ -198,6 +398,8 @@ final class PhonoscopeSimulation {
             let now = CACurrentMediaTime()
             let dt = Float(min(1.0 / 30.0, max(1.0 / 120.0, now - lastTick)))
             lastTick = now
+            advanceConfiguration(delta: Double(dt))
+            applyFieldExtents()
             advanceSignal(by: Double(dt))
             var diagnostics = PhonoscopeDiagnostics()
 
@@ -209,9 +411,103 @@ final class PhonoscopeSimulation {
             advanceFieldWaves(dt: dt)
             processEffects(started: started, diagnostics: &diagnostics)
             integrate(dt: dt, module: module)
-            diagnostics.entityCount = entities.count
-            diagnostics.particleCount = min(module.resources.maxParticles, entities.count)
+            // Counted live rather than allocated: a gated field holds cells it
+            // is not drawing, and reporting those would make the overlay claim
+            // work the renderer is not doing.
+            let live = entityLive.isEmpty ? entities.count : entityLive.reduce(0) { $0 + ($1 ? 1 : 0) }
+            diagnostics.entityCount = live
+            diagnostics.particleCount = min(module.resources.maxParticles, live)
             publish(started: started, diagnostics: diagnostics)
+        }
+    }
+
+    /// Resolves each gated field's live sub-rectangle from the current
+    /// settings. Runs every tick, before anything reads the field, because
+    /// extent is driven. Mirrors nova-visualiser Simulation::applyFieldExtents.
+    private func applyFieldExtents() {
+        guard fields.contains(where: \.gated) else { return }
+        let inputs = expressionInputs(random: 0.5)
+
+        // An allocated grid of N cells spans N-1 gaps across the module bounds,
+        // so an extent of `fraction` is that many gaps of it. Working in cells
+        // rather than world units keeps this exact at every complexity: the gap
+        // never has to be divided back out.
+        func liveCount(_ extent: PhonoscopeJSONValue?, allocated: Int) -> Int {
+            let raw = PhonoscopeExpression.evaluate(extent, inputs: inputs, fallback: 1)
+            let fraction = min(max(raw, 0), 1)
+            let desired = max(1, Int((fraction * Double(allocated - 1)).rounded()) + 1)
+            // Snap to the allocated count's parity. The live rectangle is
+            // centred, so an odd difference would sit it half a gap off centre
+            // — and a driver sweeping the extent would make the whole grid
+            // shimmer sideways as it grew.
+            let margin = max(0, (allocated - min(desired, allocated)) / 2)
+            return max(1, allocated - margin * 2)
+        }
+
+        entityLive = Array(repeating: true, count: entities.count)
+        for index in fields.indices where fields[index].gated {
+            var field = fields[index]
+            field.liveColumns = field.extentX == nil
+                ? field.columns
+                : liveCount(field.extentX, allocated: field.columns)
+            field.liveRows = field.extentY == nil
+                ? field.rows
+                : liveCount(field.extentY, allocated: field.rows)
+            field.columnBegin = (field.columns - field.liveColumns) / 2
+            field.rowBegin = (field.rows - field.liveRows) / 2
+            fields[index] = field
+
+            for entity in field.range where entity < entityLive.count {
+                let local = entity - field.range.lowerBound
+                let x = local % field.columns
+                let y = (local / field.columns) % field.rows
+                guard !field.cellIsLive(x, y) else { continue }
+                entityLive[entity] = false
+                // Park the dead cell rather than leaving it wherever the last
+                // live tick left it. It is not integrated while dead, so
+                // without this it would reappear mid-ripple when the extent
+                // grows back over it.
+                entities[entity].position = entities[entity].origin
+                entities[entity].velocity = .zero
+                entities[entity].energy = 0
+                entities[entity].waveEnergy = 0
+                entities[entity].waveTarget = 0
+                entities[entity].waveOffset = .zero
+            }
+        }
+    }
+
+    /// Entities beyond the array — beat-emitted particles — are always live.
+    private func isLive(_ index: Int) -> Bool {
+        index >= entityLive.count || entityLive[index]
+    }
+
+    private func advanceConfiguration(delta: Double) {
+        guard !transitionPaused else { return }
+        let amount = phonoscopeChaseAmount(delta: delta, settlingDuration: transitionDuration)
+        palette = palette.approached(toward: targetPalette, amount: amount)
+        for (key, target) in targetSettings where !driverInterpolatedSettings.contains(key) {
+            let current = settings[key] ?? target
+            settings[key] = current + (target - current) * amount
+        }
+        if module?.id == "particle-ripples" {
+            let threshold = Float(settings["peak_threshold"] ?? 0.28)
+            let glow = Float(settings["peak_glow"] ?? 6.5)
+            let trail = Float(settings["trail_length"] ?? 7)
+            // Pixels become a clip radius once, above the loop: the divisor is
+            // the frame's height, not anything per dot. The 3.8 fallback is the
+            // manifest default, so a settings group saved before `dot_size`
+            // existed renders the authored size rather than nothing. Clamped on
+            // the same 0...0.32 axis the entity builder uses; zero is legal and
+            // means no dots.
+            let dotSize = max(0, min(0.32, phonoscopeDotSizeClip(
+                Float(settings["dot_size"] ?? 3.8), outputHeight: outputHeight)))
+            for index in entities.indices {
+                entities[index].flareThreshold = threshold
+                entities[index].flareGlow = glow
+                entities[index].trailLength = trail
+                entities[index].size = dotSize
+            }
         }
     }
 
@@ -237,13 +533,18 @@ final class PhonoscopeSimulation {
     private func rebuild() {
         entities.removeAll(keepingCapacity: true)
         fields.removeAll(keepingCapacity: true)
+        entityLive.removeAll(keepingCapacity: true)
         fieldWaves.removeAll(keepingCapacity: true)
         effectQueue.removeAll(keepingCapacity: true)
         emitters.removeAll(keepingCapacity: true)
         lastBeatIndex = Int.min
         guard let module else { return }
         let maximum = min(module.resources.maxInteractiveFieldEntities, 16_384)
-        var seed = signal.trackSeed ^ UInt64(bitPattern: Int64(module.id.hashValue))
+        // Explicit FNV-1a, not `String.hashValue`. Swift salts string hashing
+        // per process, so the old seed differed between launches and could never
+        // agree with the GPU renderer on iridium, which implements this same
+        // module spec. See nova-visualiser/tests/conformance.
+        var seed = signal.trackSeed ^ phonoscopeModuleSeed(module.id)
         func random() -> Float {
             seed = seed &* 6_364_136_223_846_793_005 &+ 1
             return Float((seed >> 40) & 0x00ff_ffff) / Float(0x00ff_ffff)
@@ -257,17 +558,78 @@ final class PhonoscopeSimulation {
             }
             let requested = Int(field["count"]?.numberValue ?? 0)
             let resolution = field["resolution"]?.arrayValue?.compactMap(\.numberValue).map(Int.init) ?? []
-            let columns = max(1, resolution.first ?? Int(sqrt(Double(max(1, requested)))))
-            let rows = max(1, resolution.count > 1 ? resolution[1] : max(1, requested / columns))
-            let depth = max(1, module.is3D && resolution.count > 2 ? resolution[2] : 1)
-            let count = min(max(1, requested > 0 ? requested : columns * rows * depth), maximum - entities.count)
+            let baseColumns = max(1, resolution.first ?? Int(sqrt(Double(max(1, requested)))))
+            let baseRows = max(1, resolution.count > 1 ? resolution[1] : max(1, requested / baseColumns))
+            let baseDepth = max(1, module.is3D && resolution.count > 2 ? resolution[2] : 1)
+            let layout = field["layout"]?.stringValue ?? "grid"
+            let inputs = expressionInputs(random: 0.5)
+            let density = Float(PhonoscopeExpression.evaluate(field["density"], inputs: inputs, fallback: 1))
+            let normalizedDensity = max(0.05, min(1, density))
+            let axisScale = module.is3D ? pow(normalizedDensity, 1.0 / 3.0) : sqrt(normalizedDensity)
+            // Counts at the *reference* extent — the footprint the module author
+            // declared as `resolution` x `spacing`. These set the gap; whether
+            // the grid is then allocated at that size or at the full bounds is
+            // decided below. Mirrors nova-visualiser Simulation::rebuild().
+            let referenceColumns = layout == "grid" ? max(1, Int((Float(baseColumns) * axisScale).rounded())) : baseColumns
+            let referenceRows = layout == "grid" ? max(1, Int((Float(baseRows) * axisScale).rounded())) : baseRows
+            let depth = layout == "grid" ? max(1, Int((Float(baseDepth) * axisScale).rounded())) : baseDepth
+            let declaredSpacing = field["spacing"]?.arrayValue?.compactMap(\.numberValue).map(Float.init) ?? []
+            let usesDensity = field["density"] != nil
+            func resolvedSpacing(_ declared: Float?, baseCount: Int, scaledCount: Int) -> Float? {
+                guard let declared, declared > 0 else { return nil }
+                guard usesDensity, baseCount > 1, scaledCount > 1 else { return declared }
+                // Density changes entity count, not the visual footprint. Preserve
+                // the module author's original grid extent instead of stretching
+                // the field to the module's full bounds.
+                return declared * Float(baseCount - 1) / Float(scaledCount - 1)
+            }
+            let spacingX = resolvedSpacing(
+                declaredSpacing.first,
+                baseCount: baseColumns,
+                scaledCount: referenceColumns
+            )
+            let spacingY = resolvedSpacing(
+                declaredSpacing.dropFirst().first,
+                baseCount: baseRows,
+                scaledCount: referenceRows
+            )
+            let spacingZ = resolvedSpacing(
+                declaredSpacing.dropFirst(2).first,
+                baseCount: baseDepth,
+                scaledCount: depth
+            )
+
+            // A field that declares `extentX`/`extentY` sizes itself from the
+            // gap rather than the other way round: the gap is whatever
+            // complexity made it, and the grid is allocated to fill the module
+            // bounds at that gap. The live extent then gates a centred
+            // sub-rectangle every tick, so a driver can sweep it without a
+            // structural rebuild — extent cannot be a `structural` setting,
+            // because structural settings are excluded from driver lanes.
+            //
+            // Fields declaring neither keep the original sizing exactly, which
+            // is what holds every other module's conformance digest still.
+            let extentX = field["extentX"]
+            let extentY = field["extentY"]
+            let gated = layout == "grid" && (extentX != nil || extentY != nil)
+            func spanCount(_ span: Float, gap: Float?, fallback: Int) -> Int {
+                guard let gap, gap > 0, span > 0 else { return fallback }
+                return max(1, Int((span / gap).rounded()) + 1)
+            }
+            let columns = gated
+                ? spanCount(module.maximum.x - module.minimum.x, gap: spacingX, fallback: referenceColumns)
+                : referenceColumns
+            let rows = gated
+                ? spanCount(module.maximum.y - module.minimum.y, gap: spacingY, fallback: referenceRows)
+                : referenceRows
+
+            let requestedCount = requested > 0 ? requested : baseColumns * baseRows * baseDepth
+            let scaledCount = layout == "grid"
+                ? columns * rows * depth
+                : Int((Float(requestedCount) * normalizedDensity).rounded())
+            let count = min(max(1, scaledCount), maximum - entities.count)
             if count <= 0 { break }
             let start = entities.count
-            let layout = field["layout"]?.stringValue ?? "grid"
-            let declaredSpacing = field["spacing"]?.arrayValue?.compactMap(\.numberValue).map(Float.init) ?? []
-            let spacingX = declaredSpacing.first.flatMap { $0 > 0 ? $0 : nil }
-            let spacingY = declaredSpacing.dropFirst().first.flatMap { $0 > 0 ? $0 : nil }
-            let spacingZ = declaredSpacing.dropFirst(2).first.flatMap { $0 > 0 ? $0 : nil }
             let center = (module.minimum + module.maximum) * 0.5
             let fieldTemplate = field["template"]?.stringValue
                 .flatMap { module.templates[$0] }
@@ -308,6 +670,21 @@ final class PhonoscopeSimulation {
             }
             let fallbackSpacingX = columns > 1 ? (module.maximum.x - module.minimum.x) / Float(columns - 1) : 1
             let fallbackSpacingY = rows > 1 ? (module.maximum.y - module.minimum.y) / Float(rows - 1) : fallbackSpacingX
+            let legacyLineSlots = phonoscopePaletteSlots(
+                in: field["wireframeColor"]?["$expr"]?.stringValue ?? ""
+            )
+            let lineStartSlots = phonoscopePaletteSlots(
+                in: field["wireframeColorStart"]?["$expr"]?.stringValue ?? ""
+            )
+            let lineEndSlots = phonoscopePaletteSlots(
+                in: field["wireframeColorEnd"]?["$expr"]?.stringValue ?? ""
+            )
+            let lineStartSlot = lineStartSlots.first
+                ?? legacyLineSlots.first
+                ?? "linePrimary"
+            let lineEndSlot = lineEndSlots.first
+                ?? legacyLineSlots.dropFirst().first
+                ?? lineStartSlot
             fields.append(PhonoscopeFieldRange(
                 range: start..<entities.count,
                 columns: columns,
@@ -315,7 +692,18 @@ final class PhonoscopeSimulation {
                 depth: depth,
                 topology: field["topology"]?.stringValue ?? "grid",
                 spacing: max(0.0001, min(spacingX ?? fallbackSpacingX, spacingY ?? fallbackSpacingY)),
-                radialBeatWave: radialBeatWave(in: resolvedScene)
+                wireframe: field["wireframe"],
+                lineStartSlot: lineStartSlot,
+                lineEndSlot: lineEndSlot,
+                radialBeatWave: radialBeatWave(in: resolvedScene),
+                gated: gated,
+                extentX: extentX,
+                extentY: extentY,
+                // Full extent until the first `applyFieldExtents`, so a field is
+                // never momentarily empty between the rebuild and the tick that
+                // sizes it.
+                liveColumns: columns,
+                liveRows: rows
             ))
             if fields.last?.radialBeatWave != nil {
                 for index in start..<entities.count {
@@ -340,10 +728,16 @@ final class PhonoscopeSimulation {
                 depth: 1,
                 topology: "nearest",
                 spacing: 1,
-                radialBeatWave: nil
+                wireframe: nil,
+                lineStartSlot: "primary",
+                lineEndSlot: "primary",
+                radialBeatWave: nil,
+                liveColumns: entities.count,
+                liveRows: 1
             ))
         }
         visitedTokens = Array(repeating: 0, count: entities.count)
+        entityLive = Array(repeating: true, count: entities.count)
         effectQueue.reserveCapacity(8_192)
     }
 
@@ -404,10 +798,21 @@ final class PhonoscopeSimulation {
         let flareGlow = Float(PhonoscopeExpression.evaluate(render["flareGlow"], inputs: inputs, fallback: 0))
         let trailLength = Float(PhonoscopeExpression.evaluate(render["trailLength"], inputs: inputs, fallback: 0))
         let lifetime = Float(PhonoscopeExpression.evaluate(value["lifetime"], inputs: inputs, fallback: 0))
+        // `render.dotSizePixels` is a diameter in TRUE DEVICE PIXELS of the
+        // output and wins wherever it is present; `transform.scale[0]` is the
+        // legacy clip-space size and stays the fallback for every module that
+        // predates the key. Both are still evaluated here, at build, so the very
+        // first published frame is right before `advanceConfiguration` has run
+        // the live pass once. Mirrors `Simulation::styledEntity`.
         let transform = value["transform"]?.objectValue
         let scaleValue = transform?["scale"]
         let size: Float
-        if let array = scaleValue?.arrayValue, let first = array.first {
+        if let dotPixels = render["dotSizePixels"] {
+            size = phonoscopeDotSizeClip(
+                Float(PhonoscopeExpression.evaluate(dotPixels, inputs: inputs, fallback: 3.8)),
+                outputHeight: outputHeight
+            )
+        } else if let array = scaleValue?.arrayValue, let first = array.first {
             size = Float(PhonoscopeExpression.evaluate(first, inputs: inputs, fallback: 0.025))
         } else {
             size = Float(PhonoscopeExpression.evaluate(scaleValue, inputs: inputs, fallback: 0.025))
@@ -415,7 +820,50 @@ final class PhonoscopeSimulation {
         let phase = random()
         let palette = SIMD4<Float>(0.12 + phase * 0.32, 0.54 + phase * 0.34, 0.92, 0.78)
         let paletteExpression = render["color"]?["$expr"]?.stringValue ?? ""
-        let usesThemePalette = paletteExpression.contains("palette.")
+        let colorStartExpression = render["colorStart"]?["$expr"]?.stringValue ?? ""
+        let colorEndExpression = render["colorEnd"]?["$expr"]?.stringValue ?? ""
+        let glowExpression = render["glowColor"]?["$expr"]?.stringValue ?? ""
+        let glowStartExpression = render["glowColorStart"]?["$expr"]?.stringValue ?? ""
+        let glowEndExpression = render["glowColorEnd"]?["$expr"]?.stringValue ?? ""
+        let trailExpression = render["trailColor"]?["$expr"]?.stringValue ?? ""
+        let trailStartExpression = render["trailColorStart"]?["$expr"]?.stringValue ?? ""
+        let trailEndExpression = render["trailColorEnd"]?["$expr"]?.stringValue ?? ""
+        let usesThemePalette = [
+            paletteExpression,
+            colorStartExpression,
+            colorEndExpression,
+            glowExpression,
+            glowStartExpression,
+            glowEndExpression,
+            trailExpression,
+            trailStartExpression,
+            trailEndExpression,
+        ].contains { $0.contains("palette.") }
+        let legacyColorSlots = phonoscopePaletteSlots(in: paletteExpression)
+        let colorStartSlots = phonoscopePaletteSlots(in: colorStartExpression)
+        let colorEndSlots = phonoscopePaletteSlots(in: colorEndExpression)
+        let legacyGlowSlots = phonoscopePaletteSlots(in: glowExpression)
+        let glowStartSlots = phonoscopePaletteSlots(in: glowStartExpression)
+        let glowEndSlots = phonoscopePaletteSlots(in: glowEndExpression)
+        let legacyTrailSlots = phonoscopePaletteSlots(in: trailExpression)
+        let trailStartSlots = phonoscopePaletteSlots(in: trailStartExpression)
+        let trailEndSlots = phonoscopePaletteSlots(in: trailEndExpression)
+        let colorStartSlot = colorStartSlots.first ?? legacyColorSlots.first ?? "primary"
+        let colorEndSlot = colorEndSlots.first
+            ?? legacyColorSlots.dropFirst().first
+            ?? colorStartSlot
+        let glowStartSlot = glowStartSlots.first
+            ?? legacyGlowSlots.first
+            ?? colorStartSlot
+        let glowEndSlot = glowEndSlots.first
+            ?? legacyGlowSlots.dropFirst().first
+            ?? glowStartSlot
+        let trailStartSlot = trailStartSlots.first
+            ?? legacyTrailSlots.first
+            ?? colorStartSlot
+        let trailEndSlot = trailEndSlots.first
+            ?? legacyTrailSlots.dropFirst().first
+            ?? trailStartSlot
         let color: SIMD4<Float>
         if let components = render["color"]?.arrayValue?.compactMap(\.numberValue), components.count >= 3 {
             color = SIMD4(
@@ -436,7 +884,12 @@ final class PhonoscopeSimulation {
             origin: position,
             phase: phase,
             lifetime: max(0, lifetime),
-            size: max(0.003, min(0.32, size)),
+            // Floors at 0, not 0.003. A `dotSizePixels` dot is authored in real
+            // pixels down to zero, and 0.003 clip is 3.24px at 1080p — the old
+            // floor would have silently clamped the bottom of the declared range
+            // here and not on Iridium, and `dot_size: 0` would not have turned
+            // the dots off.
+            size: max(0, min(0.32, size)),
             energySize: max(0, min(0.32, energySize)),
             beatSize: max(0, min(0.32, beatSize)),
             flareThreshold: max(0, min(2, flareThreshold)),
@@ -448,6 +901,12 @@ final class PhonoscopeSimulation {
             material: materialCode(materialName),
             color: color,
             usesThemePalette: usesThemePalette,
+            paletteStartSlot: colorStartSlot,
+            paletteEndSlot: colorEndSlot,
+            paletteGlowStartSlot: glowStartSlot,
+            paletteGlowEndSlot: glowEndSlot,
+            paletteTrailStartSlot: trailStartSlot,
+            paletteTrailEndSlot: trailEndSlot,
             inverseMass: 1 / max(0.001, mass),
             inertia: max(0, min(1, inertia)),
             drag: max(0, drag)
@@ -582,10 +1041,15 @@ final class PhonoscopeSimulation {
                 let attack = Float(PhonoscopeExpression.evaluate(source.attack, inputs: inputs, fallback: 0.04))
                 let release = Float(PhonoscopeExpression.evaluate(source.release, inputs: inputs, fallback: 0.55))
                 let flashPower = Float(PhonoscopeExpression.evaluate(source.flashPower, inputs: inputs, fallback: 4.5))
-                let centerPosition = field.range.reduce(SIMD3<Float>.zero) {
+                // Both of these are measured over the live cells only. A gated
+                // field is allocated at its full size, and taking the allocated
+                // corner here would size every ripple to a lattice most of
+                // which is not on screen.
+                let liveCells = field.range.filter { isLive($0) }
+                let centerPosition = liveCells.reduce(SIMD3<Float>.zero) {
                     $0 + entities[$1].origin
-                } / Float(max(1, field.range.count))
-                let maximumRadius = field.range.reduce(Float.zero) {
+                } / Float(max(1, liveCells.count))
+                let maximumRadius = liveCells.reduce(Float.zero) {
                     max($0, simd_distance(entities[$1].origin, centerPosition))
                 }
                 fieldWaves.append(PhonoscopeFieldWave(
@@ -612,6 +1076,7 @@ final class PhonoscopeSimulation {
     }
 
     private func advanceFieldWaves(dt: Float) {
+        let offsetMagnifier = Float(max(0, min(50, settings["offset_magnifier"] ?? 1)))
         for index in entities.indices where entities[index].usesAnalyticWave {
             entities[index].waveOffset = .zero
             entities[index].waveTarget = 0
@@ -622,7 +1087,7 @@ final class PhonoscopeSimulation {
                 guard fields.indices.contains(wave.fieldIndex) else { continue }
                 let field = fields[wave.fieldIndex]
                 let nextRadius = wave.radius + wave.speed * dt
-                for entityIndex in field.range {
+                for entityIndex in field.range where isLive(entityIndex) {
                     let radial = entities[entityIndex].origin - wave.center
                     let distance = simd_length(radial)
                     let distanceToFront = distance - nextRadius
@@ -657,6 +1122,7 @@ final class PhonoscopeSimulation {
                         let gerstnerOffset = direction
                             * horizontalAmplitude
                             * crest
+                            * offsetMagnifier
                         entities[entityIndex].waveOffset += SIMD3(
                             gerstnerOffset.x,
                             gerstnerOffset.y,
@@ -724,6 +1190,10 @@ final class PhonoscopeSimulation {
         guard let field = fields.first(where: { $0.range.contains(index) }) else { return [] }
         let local = index - field.range.lowerBound
         if field.topology == "none" { return [] }
+        // A dead cell is not part of the lattice: it neither conducts an
+        // effect nor receives one, so a ripple stops at the live boundary
+        // instead of crossing the gap and re-emerging on the far side.
+        if field.gated, !isLive(index) { return [] }
         if field.topology == "nearest" || field.topology == "radius" || field.rows == 1 {
             let before = local > 0 ? index - 1 : field.range.upperBound - 1
             let after = local + 1 < field.range.count ? index + 1 : field.range.lowerBound
@@ -735,6 +1205,7 @@ final class PhonoscopeSimulation {
         var result: [Int] = []
         func append(_ nx: Int, _ ny: Int, _ nz: Int) {
             guard nx >= 0, nx < field.columns, ny >= 0, ny < field.rows, nz >= 0, nz < field.depth else { return }
+            guard field.cellIsLive(nx, ny) else { return }
             let neighbor = field.range.lowerBound + nz * field.columns * field.rows + ny * field.columns + nx
             if field.range.contains(neighbor) { result.append(neighbor) }
         }
@@ -755,6 +1226,7 @@ final class PhonoscopeSimulation {
         let boundaryMode = module.boundary.mode
         let restitution = Float(module.boundary.restitution)
         for index in entities.indices {
+            guard isLive(index) else { continue }
             entities[index].age += dt
             if entities[index].lifetime > 0, entities[index].age >= entities[index].lifetime {
                 entities[index].age = 0
@@ -807,25 +1279,60 @@ final class PhonoscopeSimulation {
         var diagnostics = initialDiagnostics
         diagnostics.simulationMilliseconds = (CACurrentMediaTime() - started) * 1_000
         var particles: [PhonoscopeRenderParticle] = []
-        particles.reserveCapacity(entities.count * 2)
-        for entity in entities {
+        particles.reserveCapacity(entities.count * 3)
+        // Parallel to `entities`: the size each one was published at this frame.
+        // The grid-wire pass below runs after the entity loop and needs BOTH of a
+        // wire's endpoints at their drawn size. Zeroed rather than merely sized:
+        // a cell outside the live extent is skipped and never writes an entry,
+        // and a wire must not pick up last frame's size for it. Mirrors
+        // `Simulation::publishedSize_`.
+        var publishedSize = [Float](repeating: 0, count: entities.count)
+        func renderedColors(for entity: PhonoscopeSimEntity) -> (SIMD4<Float>, SIMD4<Float>) {
+            let usesThemePalette = entity.usesThemePalette || module?.id == "particle-ripples"
+            guard usesThemePalette else { return (entity.color, entity.color) }
+            return (
+                palette.color(entity.paletteStartSlot),
+                palette.color(entity.paletteEndSlot)
+            )
+        }
+        func renderedGlowColors(for entity: PhonoscopeSimEntity) -> (SIMD4<Float>, SIMD4<Float>) {
+            (
+                palette.color(entity.paletteGlowStartSlot),
+                palette.color(entity.paletteGlowEndSlot)
+            )
+        }
+        func renderedTrailColors(for entity: PhonoscopeSimEntity) -> (SIMD4<Float>, SIMD4<Float>) {
+            (
+                palette.color(entity.paletteTrailStartSlot),
+                palette.color(entity.paletteTrailEndSlot)
+            )
+        }
+        for entityIndex in entities.indices {
+            // Cells outside a gated field's live extent are not drawn at all.
+            // They are still allocated, which is what lets the extent be driven
+            // without a rebuild, but they contribute nothing to the picture or
+            // the draw count.
+            guard isLive(entityIndex) else { continue }
+            let entity = entities[entityIndex]
             let energy = min(1, max(0, entity.energy))
             let linearFlare = entity.flareThreshold < 1
                 ? max(0, min(1, (energy - entity.flareThreshold) / (1 - entity.flareThreshold)))
                 : 0
             let flare = linearFlare * linearFlare * (3 - 2 * linearFlare)
-            let usesThemePalette = entity.usesThemePalette || module?.id == "particle-ripples"
-            let baseColor = usesThemePalette ? palette.accent : entity.color
-            let peakColor = usesThemePalette ? palette.highlight : entity.color
-            let color = simd_mix(baseColor, peakColor, SIMD4<Float>(repeating: energy))
+            let colors = renderedColors(for: entity)
+            let glowColors = renderedGlowColors(for: entity)
             let size = entity.size
                 + energy * entity.energySize
                 + Float(signal.beatPulse) * entity.beatSize
                 + flare * entity.flareSize
+            publishedSize[entityIndex] = size
             let glow = entity.glow + energy + flare * entity.flareGlow
             particles.append(PhonoscopeRenderParticle(
                 position: entity.position,
-                color: color,
+                color: colors.0,
+                colorEnd: colors.1,
+                glowColor: glowColors.0,
+                glowColorEnd: glowColors.1,
                 size: size,
                 glow: glow,
                 primitive: entity.primitive,
@@ -838,9 +1345,13 @@ final class PhonoscopeSimulation {
             if entity.trailLength > 0,
                linearFlare > 0,
                simd_length_squared(trailDirection) > 0.000_000_01 {
+                let trailColors = renderedTrailColors(for: entity)
                 particles.append(PhonoscopeRenderParticle(
                     position: entity.position,
-                    color: color,
+                    color: trailColors.0,
+                    colorEnd: trailColors.1,
+                    glowColor: trailColors.0,
+                    glowColorEnd: trailColors.1,
                     size: size,
                     glow: glow,
                     primitive: 5,
@@ -850,12 +1361,64 @@ final class PhonoscopeSimulation {
                 ))
             }
         }
+        let inputs = expressionInputs(random: 0.5)
+        for field in fields where field.topology == "grid"
+            && PhonoscopeExpression.evaluate(field.wireframe, inputs: inputs, fallback: 0) >= 0.5 {
+            guard field.columns > 0, field.rows > 0 else { continue }
+            let layerSize = field.columns * field.rows
+            // Wires span the live sub-rectangle only, so the lattice ends
+            // cleanly at the boundary instead of trailing lines out into cells
+            // that are not drawn.
+            let columnEnd = field.columnBegin + field.liveColumns
+            let rowEnd = field.rowBegin + field.liveRows
+            // Half-width at one end of a wire, from the size that end's dot was
+            // drawn at — the composed size, so a wire thickens where a ripple is
+            // passing rather than sitting at the field's uniform base size. The
+            // floor is what keeps a hairline lattice when the dots are at zero.
+            func endWidth(_ index: Int) -> Float {
+                max(0.0006, publishedSize[index] * 0.18)
+            }
+            func appendLine(from start: Int, to end: Int) {
+                guard field.range.contains(start), field.range.contains(end) else { return }
+                let source = entities[start]
+                let destination = entities[end]
+                particles.append(PhonoscopeRenderParticle(
+                    position: destination.position,
+                    color: palette.color(field.lineStartSlot),
+                    colorEnd: palette.color(field.lineEndSlot),
+                    glowColor: palette.color(field.lineStartSlot),
+                    glowColorEnd: palette.color(field.lineEndSlot),
+                    // Two widths: `size` is the destination end, `sourceSize` the
+                    // source end, and the shader tapers between them.
+                    size: endWidth(end),
+                    glow: 0,
+                    primitive: 6,
+                    material: 0,
+                    trailDirection: destination.position - source.position,
+                    trailLength: 1,
+                    sourceSize: endWidth(start)
+                ))
+            }
+            for z in 0..<field.depth {
+                for y in field.rowBegin..<rowEnd {
+                    for x in field.columnBegin..<columnEnd {
+                        let index = field.range.lowerBound + z * layerSize + y * field.columns + x
+                        if x + 1 < columnEnd { appendLine(from: index, to: index + 1) }
+                        if y + 1 < rowEnd { appendLine(from: index, to: index + field.columns) }
+                    }
+                }
+            }
+        }
         serial &+= 1
         let snapshot = PhonoscopeSceneSnapshot(
             serial: serial,
             timestamp: CACurrentMediaTime(),
             particles: particles,
-            background: palette.background,
+            background: simd_mix(
+                palette.background,
+                palette.color("backgroundSecondary", fallback: palette.background),
+                SIMD4<Float>(repeating: Float(min(0.35, max(0, signal.energy * 0.35))))
+            ),
             boundsMinimum: module?.minimum ?? SIMD3(-1.7778, -1, 0),
             boundsMaximum: module?.maximum ?? SIMD3(1.7778, 1, 0),
             is3D: module?.is3D ?? false,

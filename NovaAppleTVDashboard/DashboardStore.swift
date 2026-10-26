@@ -3,8 +3,11 @@ import SwiftUI
 
 @MainActor
 final class DashboardStore: ObservableObject {
+    @Published var orbEvents: OrbEventsPayload?
+    private var orbEventsTask: Task<Void, Never>?
     @Published var state: DashboardState?
     @Published var theme = DashboardTheme.default
+    @Published private(set) var followVisualizerWhenActive = false
     // Fraction (0..1) of the screen height the horizontal control band occupies.
     // Sourced from the shared theme API's top-level `layout` block so it can be
     // tuned live; defaults to 0.6 so the layout works before the server ships it.
@@ -29,6 +32,15 @@ final class DashboardStore: ObservableObject {
     private let sourceClientID = Int.random(in: 100_000...999_999)
     private var pollingTask: Task<Void, Never>?
     private var orbModulesTask: Task<Void, Never>?
+    private var configuredTheme = DashboardTheme.default
+    private var visualizerColorOverride: DashboardTheme?
+    private var themeTransitionTask: Task<Void, Never>?
+    /// This TV's own theme mode: "auto", "light", "dark", or "" to follow the
+    /// shared selection. Set by the theme selector left of the orb.
+    @Published private(set) var themeOverride = UserDefaults.standard.string(forKey: DashboardStore.themeOverrideKey) ?? ""
+    static let themeOverrideKey = "nova.tv.themeOverride"
+    private var lastThemePayload: SharedThemePayload?
+    private var lastThemeSun: SunStatus?
 
     var selectedZone: DashboardZone? {
         guard let state else { return nil }
@@ -47,6 +59,12 @@ final class DashboardStore: ObservableObject {
                 try? await Task.sleep(for: .seconds(5))
             }
         }
+        orbEventsTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refreshOrbEvents()
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
         // Orb modules change rarely (a JSON drop on the host), so they poll
         // on their own slow cadence — matching the web client's 5 minutes.
         orbModulesTask = Task { [weak self] in
@@ -62,6 +80,22 @@ final class DashboardStore: ObservableObject {
     /// always has something to render.
     func orbModule(id: String?) -> OrbModule? {
         OrbModuleCatalog.resolve(id: id, fetched: orbModules)
+    }
+
+    func refreshOrbEvents() async {
+        do {
+            let (data, response) = try await get(path: "api/orb-info/events")
+            try validate(response: response, data: data)
+            orbEvents = try decoder.decode(OrbEventsPayload.self, from: data)
+        } catch { /* Retain the last snapshot through a short connection gap. */ }
+    }
+    func dismissOrbEvent(_ target: OrbDismissPayload) async {
+        do {
+            let path = target.kind == "timer" ? "api/orb-timer" : "api/tasks/\(target.id)/dismiss"
+            let (data, response) = try await post(path: path, body: target.kind == "timer" ? ["command": "dismiss", "id": target.id] : [:])
+            try validate(response: response, data: data)
+            await refreshOrbEvents()
+        } catch { errorMessage = error.localizedDescription }
     }
 
     func refreshOrbModules() async {
@@ -109,12 +143,92 @@ final class DashboardStore: ObservableObject {
                 return
             }
             let payload = try decoder.decode(SharedThemeResponse.self, from: data)
-            theme = DashboardTheme(sharedTheme: payload.theme?.resolved(sun: sun))
+            lastThemePayload = payload.theme
+            lastThemeSun = sun
+            configuredTheme = DashboardTheme(sharedTheme: payload.theme?.resolved(sun: sun, override: themeOverride))
+            followVisualizerWhenActive = payload.followVisualizerWhenActive == true
+            if !followVisualizerWhenActive {
+                visualizerColorOverride = nil
+            }
+            // A server-side theme edit is a real colour change and should ease
+            // in like any other. Identical polls resolve to the same target and
+            // short-circuit, so this costs nothing in the steady state.
+            applyCurrentTheme(duration: 0.6)
             if let fraction = payload.layout?.tvHeightFraction {
                 layoutHeightFraction = clamped(fraction, 0.3, 0.95)
             }
         } catch {
             // Shared theme is cosmetic; keep the last good value.
+        }
+    }
+
+    /// Sets this TV's theme mode ("auto", "light", "dark", or "" to follow the
+    /// shared setting) and eases the dashboard into it at once, from the last
+    /// theme the server sent. Stored on the TV only, never sent to the server
+    /// (the web's per-device override, specs/theme-mode-selector.md).
+    func setThemeOverride(_ mode: String) {
+        guard mode != themeOverride else { return }
+        themeOverride = mode
+        UserDefaults.standard.set(mode, forKey: Self.themeOverrideKey)
+        guard let lastThemePayload else { return }
+        configuredTheme = DashboardTheme(sharedTheme: lastThemePayload.resolved(sun: lastThemeSun, override: mode))
+        applyCurrentTheme(duration: 0.6)
+    }
+
+    /// `duration` defaults to 0 because the followed palette is already
+    /// interpolated by `PhonoscopeStore.advanceTheme`; ramping it again here
+    /// would only add lag. Pass a duration for discrete jumps -- entering or
+    /// leaving a follow.
+    func setVisualizerColorOverride(_ override: DashboardTheme?, duration: Double = 0) {
+        visualizerColorOverride = followVisualizerWhenActive ? override : nil
+        applyCurrentTheme(duration: duration)
+    }
+
+    func clearVisualizerColorOverride(duration: Double, delay: Double = 0) {
+        visualizerColorOverride = nil
+        applyCurrentTheme(duration: duration, delay: delay)
+    }
+
+    private func applyCurrentTheme(duration: Double = 0, delay: Double = 0) {
+        let target = visualizerColorOverride.map {
+            configuredTheme.colorMixed(with: $0, amount: 1)
+        } ?? configuredTheme
+        transitionTheme(to: target, duration: duration, delay: delay)
+    }
+
+    /// The single path by which `theme` ever changes. Every colour move --
+    /// entering a visualiser follow, each palette rotation while following,
+    /// leaving it, and a fresh `/api/theme` poll -- runs through this ramp.
+    /// Previously only the *exit* interpolated and the rest assigned `theme`
+    /// outright, which is why titles and every other theme-driven colour
+    /// snapped between palettes.
+    private func transitionTheme(to target: DashboardTheme, duration: Double, delay: Double = 0) {
+        themeTransitionTask?.cancel()
+        themeTransitionTask = nil
+        guard duration > 0, theme != target else {
+            theme = target
+            return
+        }
+
+        let from = theme
+        themeTransitionTask = Task { [weak self] in
+            if delay > 0 {
+                try? await Task.sleep(for: .seconds(delay))
+                guard !Task.isCancelled else { return }
+            }
+            let started = Date()
+            while !Task.isCancelled {
+                let progress = min(1, Date().timeIntervalSince(started) / duration)
+                let eased = progress * progress * (3 - 2 * progress)
+                self?.theme = from.colorMixed(with: target, amount: eased)
+                if progress >= 1 { break }
+                // ~60fps. At the old 33ms the ramp itself was visibly stepped
+                // on short transitions.
+                try? await Task.sleep(for: .milliseconds(16))
+            }
+            guard !Task.isCancelled else { return }
+            self?.theme = target
+            self?.themeTransitionTask = nil
         }
     }
 
@@ -226,7 +340,7 @@ final class DashboardStore: ObservableObject {
         }
     }
 
-    private func validate(response: URLResponse, data: Data) throws {
+    func validate(response: URLResponse, data: Data) throws {
         guard let http = response as? HTTPURLResponse else { return }
         guard 200..<300 ~= http.statusCode else {
             if let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -254,7 +368,7 @@ final class DashboardStore: ObservableObject {
         throw lastError ?? DashboardError.server("Nova is unreachable")
     }
 
-    private func post(path: String, body: [String: Any]) async throws -> (Data, URLResponse) {
+    func post(path: String, body: [String: Any]) async throws -> (Data, URLResponse) {
         let payload = try JSONSerialization.data(withJSONObject: body)
         var lastError: Error?
         for url in AppConfig.urls(path: path) {
@@ -277,6 +391,7 @@ final class DashboardStore: ObservableObject {
 }
 
 struct SharedThemeResponse: Decodable {
+    let followVisualizerWhenActive: Bool?
     let theme: SharedThemePayload?
     let layout: SharedLayoutConfig?
 }
@@ -305,9 +420,11 @@ struct SharedThemePayload: Decodable {
         legacyTheme = (try? SharedDeviceTheme(from: decoder)) ?? SharedDeviceTheme()
     }
 
-    func resolved(sun: SunStatus?) -> SharedDeviceTheme? {
+    /// `override` is this TV's own theme mode (auto, light or dark), which wins
+    /// over the shared selection; empty follows it, as the web's override does.
+    func resolved(sun: SunStatus?, override: String = "") -> SharedDeviceTheme? {
         if let themes {
-            let variant = resolvedVariant(sun: sun)
+            let variant = resolvedVariant(sun: sun, override: override)
             let resolvedTheme: SharedDeviceTheme?
             if variant == "light" {
                 resolvedTheme = themes.light ?? themes.dark
@@ -322,8 +439,13 @@ struct SharedThemePayload: Decodable {
         return legacyTheme.hasThemeFields ? legacyTheme : nil
     }
 
-    private func resolvedVariant(sun: SunStatus?) -> String {
-        switch selection {
+    func resolved(variant: String) -> SharedDeviceTheme? {
+        guard let themes else { return resolved(sun: nil) }
+        return variant == "light" ? (themes.light ?? themes.dark) : (themes.dark ?? themes.light)
+    }
+
+    private func resolvedVariant(sun: SunStatus?, override: String) -> String {
+        switch override.isEmpty ? selection : override {
         case "light":
             return "light"
         case "auto":
@@ -349,6 +471,14 @@ struct SharedDeviceTheme: Decodable {
     var clockColor: SharedThemeColor? = nil
     var titleColors: SharedThemeTitleColors? = nil
     var titleTone: String? = nil
+    /// The knob face's own light/dark treatment ("auto" | "dark" | "light").
+    /// Deliberately independent of the variant it sits in: the dashboard's dark
+    /// theme can ask for the pale knob and vice versa.
+    var knobSkin: String? = nil
+    /// The colour the dial's mode lights and the knob's lit ring use.
+    var ledColor: SharedThemeColor? = nil
+    /// The colour of the ring that lights while a dial is unlocked.
+    var unlockRingColor: SharedThemeColor? = nil
 
     var hasThemeFields: Bool {
         accent != nil ||
@@ -586,6 +716,27 @@ struct DashboardAvatarTheme: Equatable {
         )
     }
 
+    func colorMixed(with other: DashboardAvatarTheme, amount: Double) -> DashboardAvatarTheme {
+        let blend = min(1, max(0, amount))
+        return DashboardAvatarTheme(
+            gradientAlert: gradientAlert.mixed(with: other.gradientAlert, amount: blend),
+            gradientCenter: gradientCenter.mixed(with: other.gradientCenter, amount: blend),
+            gradientOuter: gradientOuter.mixed(with: other.gradientOuter, amount: blend),
+            gymAlertThresholdHours: gymAlertThresholdHours,
+            gymNumberColor: gymNumberColor.mixed(with: other.gymNumberColor, amount: blend),
+            gymNumberOpacity: gymNumberOpacity,
+            voiceGlowColor: voiceGlowColor.mixed(with: other.voiceGlowColor, amount: blend),
+            lineColors: lineColors.enumerated().map { index, color in
+                color.mixed(with: index < other.lineColors.count ? other.lineColors[index] : color, amount: blend)
+            },
+            lineOpacities: lineOpacities,
+            innerShadowOpacity: innerShadowOpacity,
+            orbModule: orbModule,
+            orbModuleSettings: orbModuleSettings,
+            glass: glass
+        )
+    }
+
 }
 
 private func normalizeOrbModuleSettings(_ value: [String: [String: Double]]?) -> [String: [String: Double]] {
@@ -740,6 +891,12 @@ struct DashboardTheme: Equatable {
     var titleDark: ThemeRGB
     var titleLight: ThemeRGB
     var titleTone: String
+    /// The knob face's light/dark treatment: "auto" | "dark" | "light".
+    var knobSkin: String
+    /// The dial's mode lights and the knob's lit ring.
+    var ledColor: ThemeRGB
+    /// The ring that lights while a dial is unlocked.
+    var unlockRingColor: ThemeRGB
 
     static let `default` = DashboardTheme(
         accent: ThemeRGB(red: 97, green: 97, blue: 97),
@@ -752,7 +909,10 @@ struct DashboardTheme: Equatable {
         clockColor: ThemeRGB(red: 224, green: 205, blue: 154),
         titleDark: ThemeRGB(red: 42, green: 0, blue: 61),
         titleLight: ThemeRGB(red: 173, green: 173, blue: 173),
-        titleTone: "auto"
+        titleTone: "auto",
+        knobSkin: "auto",
+        ledColor: ThemeRGB(red: 255, green: 255, blue: 255),
+        unlockRingColor: ThemeRGB(red: 255, green: 255, blue: 255)
     )
 
     init(
@@ -766,7 +926,10 @@ struct DashboardTheme: Equatable {
         clockColor: ThemeRGB,
         titleDark: ThemeRGB,
         titleLight: ThemeRGB,
-        titleTone: String
+        titleTone: String,
+        knobSkin: String,
+        ledColor: ThemeRGB,
+        unlockRingColor: ThemeRGB
     ) {
         self.accent = accent
         self.highlight = highlight
@@ -779,6 +942,9 @@ struct DashboardTheme: Equatable {
         self.titleDark = titleDark
         self.titleLight = titleLight
         self.titleTone = titleTone
+        self.knobSkin = knobSkin
+        self.ledColor = ledColor
+        self.unlockRingColor = unlockRingColor
     }
 
     init(sharedTheme: SharedDeviceTheme?) {
@@ -794,6 +960,10 @@ struct DashboardTheme: Equatable {
         let titleDark = resolveThemeColor(sharedTheme?.titleColors?.dark, fallback: fallback.titleDark)
         let titleLight = resolveThemeColor(sharedTheme?.titleColors?.light, fallback: fallback.titleLight)
         let titleTone = sharedTheme?.titleTone ?? fallback.titleTone
+        let knobSkin = (sharedTheme?.knobSkin).flatMap { ["auto", "dark", "light"].contains($0) ? $0 : nil }
+            ?? fallback.knobSkin
+        let ledColor = resolveThemeColor(sharedTheme?.ledColor, fallback: fallback.ledColor)
+        let unlockRingColor = resolveThemeColor(sharedTheme?.unlockRingColor, fallback: fallback.unlockRingColor)
         let derivedClockFallback: ThemeRGB
         if titleTone == "dark" {
             derivedClockFallback = titleDark
@@ -814,7 +984,39 @@ struct DashboardTheme: Equatable {
             clockColor: resolveThemeColor(sharedTheme?.clockColor, fallback: derivedClockFallback),
             titleDark: titleDark,
             titleLight: titleLight,
-            titleTone: titleTone
+            titleTone: titleTone,
+            knobSkin: knobSkin,
+            ledColor: ledColor,
+            unlockRingColor: unlockRingColor
+        )
+    }
+
+    func mixed(with other: DashboardTheme, amount rawAmount: Double) -> DashboardTheme {
+        let amount = min(1, max(0, rawAmount))
+        func lerp(_ a: Double, _ b: Double) -> Double { a + (b - a) * amount }
+        return DashboardTheme(
+            accent: accent.mixed(with: other.accent, amount: amount),
+            highlight: highlight.mixed(with: other.highlight, amount: amount),
+            background: background.mixed(with: other.background, amount: amount),
+            backgroundEffect: FluidBackgroundSettings(
+                apexGlow: lerp(backgroundEffect.apexGlow, other.backgroundEffect.apexGlow),
+                falloffPower: lerp(backgroundEffect.falloffPower, other.backgroundEffect.falloffPower),
+                hueSpread: lerp(backgroundEffect.hueSpread, other.backgroundEffect.hueSpread),
+                peakIntensity: lerp(backgroundEffect.peakIntensity, other.backgroundEffect.peakIntensity),
+                textureScale: lerp(backgroundEffect.textureScale, other.backgroundEffect.textureScale),
+                textureURL: nil,
+                warpAmplitude: lerp(backgroundEffect.warpAmplitude, other.backgroundEffect.warpAmplitude)
+            ),
+            avatar: amount < 0.5 ? avatar : other.avatar,
+            border: border.mixed(with: other.border, amount: amount),
+            borderOpacity: lerp(borderOpacity, other.borderOpacity),
+            clockColor: clockColor.mixed(with: other.clockColor, amount: amount),
+            titleDark: titleDark.mixed(with: other.titleDark, amount: amount),
+            titleLight: titleLight.mixed(with: other.titleLight, amount: amount),
+            titleTone: amount < 0.5 ? titleTone : other.titleTone,
+            knobSkin: amount < 0.5 ? knobSkin : other.knobSkin,
+            ledColor: ledColor.mixed(with: other.ledColor, amount: amount),
+            unlockRingColor: unlockRingColor.mixed(with: other.unlockRingColor, amount: amount)
         )
     }
 
@@ -847,6 +1049,24 @@ struct DashboardTheme: Equatable {
         border.opacity(borderOpacity)
     }
 
+    /// The knob face's resolved treatment. A pinned skin is honoured exactly (the
+    /// dashboard's dark theme may ask for the pale knob and vice versa); "auto"
+    /// follows the surface the knob sits on, which is the theme's own background
+    /// — the same rule the web's `useKnobSkin` applies when no skin is pinned.
+    var knobSkinMode: KnobSkinMode {
+        switch knobSkin {
+        case "light": return .light
+        case "dark": return .dark
+        default: return background.luminance > 0.5 ? .light : .dark
+        }
+    }
+
+    /// The colour a dial's mode lights and its lit ring use.
+    var led: Color { ledColor.color }
+
+    /// The colour of the ring that lights while a dial is unlocked.
+    var unlockRing: Color { unlockRingColor.color }
+
     var clockText: Color {
         clockColor.color
     }
@@ -876,14 +1096,50 @@ struct DashboardTheme: Equatable {
         }
         return rgb.luminance > 0.5 ? titleDark : titleLight
     }
+
+    /// Blend only colour values. Fonts, sizes, background dynamics, opacity,
+    /// orb module/settings, glass and title-tone behaviour stay on the dashboard
+    /// theme so a visualiser follow is always a temporary palette override.
+    func colorMixed(with other: DashboardTheme, amount rawAmount: Double) -> DashboardTheme {
+        let amount = min(1, max(0, rawAmount))
+        return DashboardTheme(
+            accent: accent.mixed(with: other.accent, amount: amount),
+            highlight: highlight.mixed(with: other.highlight, amount: amount),
+            background: background.mixed(with: other.background, amount: amount),
+            backgroundEffect: backgroundEffect,
+            avatar: avatar.colorMixed(with: other.avatar, amount: amount),
+            border: border.mixed(with: other.border, amount: amount),
+            borderOpacity: borderOpacity,
+            clockColor: clockColor.mixed(with: other.clockColor, amount: amount),
+            titleDark: titleDark.mixed(with: other.titleDark, amount: amount),
+            titleLight: titleLight.mixed(with: other.titleLight, amount: amount),
+            titleTone: titleTone,
+            // The skin is a mode, not a colour: like title-tone behaviour it
+            // stays on the dashboard theme through a visualiser follow.
+            knobSkin: knobSkin,
+            ledColor: ledColor.mixed(with: other.ledColor, amount: amount),
+            unlockRingColor: unlockRingColor.mixed(with: other.unlockRingColor, amount: amount)
+        )
+    }
 }
 
 @MainActor
 final class NovaActivityStore: ObservableObject {
     @Published var load: NovaLoad?
+    @Published var power: PowerSnapshot?
+    @Published var tasks: [TaskSummary]?
+
+    /// Which extra feeds the currently selected status orb readout needs. The
+    /// web client subscribes only to its module's declared sources and this
+    /// keeps that property here: a client showing the clock must not be
+    /// fetching power and reminders it will never display.
+    @Published var extraFeeds: Set<OrbSourceID> = [] {
+        didSet { if extraFeeds != oldValue { startExtraFeeds() } }
+    }
 
     private let decoder = JSONDecoder()
     private var pollingTask: Task<Void, Never>?
+    private var extraTask: Task<Void, Never>?
 
     func start() {
         guard pollingTask == nil else { return }
@@ -904,6 +1160,50 @@ final class NovaActivityStore: ObservableObject {
             load = try decoder.decode(NovaLoad.self, from: data)
         } catch {
             load = nil
+        }
+    }
+
+    /// These change far more slowly than the 2s load signal, and neither drives
+    /// an animation, so they poll on their own relaxed cadence.
+    private func startExtraFeeds() {
+        extraTask?.cancel()
+        let feeds = extraFeeds
+        guard !feeds.isEmpty else {
+            extraTask = nil
+            power = nil
+            tasks = nil
+            return
+        }
+        // The tighter cadence is a UI-test affordance: a test needs a
+        // task-backed orb readout to appear inside its own deadline. The Apple
+        // TV keeps the same relaxed cadence as the power feed.
+        let cadence: Double = (feeds.contains(.tasks) && UITestHarness.isActive) ? 5 : 30
+        extraTask = Task { [weak self] in
+            while !Task.isCancelled {
+                if feeds.contains(.power) { await self?.refreshPower() }
+                if feeds.contains(.tasks) { await self?.refreshTasks() }
+                try? await Task.sleep(for: .seconds(cadence))
+            }
+        }
+    }
+
+    private func refreshPower() async {
+        do {
+            let (data, response) = try await get(path: "api/power")
+            guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else { return }
+            power = try decoder.decode(PowerSnapshot.self, from: data)
+        } catch {
+            power = nil
+        }
+    }
+
+    func refreshTasks() async {
+        do {
+            let (data, response) = try await get(path: "api/tasks?command=list")
+            guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else { return }
+            tasks = try decoder.decode(TaskListPayload.self, from: data).tasks
+        } catch {
+            tasks = nil
         }
     }
 

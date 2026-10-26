@@ -252,6 +252,30 @@ struct OrbLayerPulse: Equatable {
     var alertOnly: Bool
 }
 
+/// A visibility gate bound to one of the module's declared settings: the layer
+/// draws only while that setting sits inside `[min, max]` (either end omitted =
+/// unbounded). It is how a module ships two alternative treatments of the same
+/// surface — the Tech skin's light and dark knob — so exactly one of each pair
+/// draws. Mirrors the web's `OrbLayerGate` (lib/orb-modules/types.ts) and its
+/// `orbLayerGateOpen` (lib/orb-modules/settings-model.ts); the two engines must
+/// agree, so this is a port, not a reinterpretation.
+struct OrbLayerGate: Equatable {
+    let setting: String
+    var min: Double?
+    var max: Double?
+}
+
+/// Whether a gate is open for the resolved settings. A gate naming a setting
+/// the frame does not carry evaluates against 0, exactly as the web renderer
+/// does, so a settingless render still picks exactly one side of a pair.
+func isOrbLayerGateOpen(_ gate: OrbLayerGate?, settings: [String: Double]) -> Bool {
+    guard let gate else { return true }
+    let value = settings[gate.setting] ?? 0
+    if let min = gate.min, value < min { return false }
+    if let max = gate.max, value > max { return false }
+    return true
+}
+
 /// Fields shared by every layer type, decoded once per layer.
 struct OrbLayerBase: Equatable {
     var enabled: Bool
@@ -260,6 +284,9 @@ struct OrbLayerBase: Equatable {
     var clip: Bool
     var glow: Double
     var pulse: OrbLayerPulse?
+    /// Setting-driven visibility. Absent — or naming an id the module does not
+    /// declare — means the layer always draws (an ordinary layer, not a pair).
+    var enabledWhen: OrbLayerGate?
 
     init(container: KeyedDecodingContainer<OrbCodingKey>?) {
         enabled = (try? container?.decodeIfPresent(Bool.self, forKey: OrbCodingKey("enabled"))) ?? true
@@ -268,6 +295,20 @@ struct OrbLayerBase: Equatable {
         opacity = container.map { decodeClamped($0, "opacity", default: 1, 0, 1) } ?? 1
         clip = (try? container?.decodeIfPresent(Bool.self, forKey: OrbCodingKey("clip"))) ?? false
         glow = container.map { decodeClamped($0, "glow", default: 0, 0, 4) } ?? 0
+        // A gate naming no valid setting is dropped rather than honoured: the
+        // layer then draws as an ordinary one, which is the web's behaviour.
+        enabledWhen = nil
+        if let container,
+           container.contains(OrbCodingKey("enabledWhen")),
+           let gateContainer = try? container.nestedContainer(keyedBy: OrbCodingKey.self, forKey: OrbCodingKey("enabledWhen")),
+           let setting = (try? gateContainer.decodeIfPresent(String.self, forKey: OrbCodingKey("setting"))) ?? nil,
+           isValidOrbModuleID(setting) {
+            enabledWhen = OrbLayerGate(
+                setting: setting,
+                min: (try? gateContainer.decodeIfPresent(Double.self, forKey: OrbCodingKey("min"))) ?? nil,
+                max: (try? gateContainer.decodeIfPresent(Double.self, forKey: OrbCodingKey("max"))) ?? nil
+            )
+        }
         pulse = nil
         if let container,
            container.contains(OrbCodingKey("pulse")),
@@ -596,6 +637,11 @@ struct OrbModuleSetting: Equatable, Decodable {
     var max: Double
     var step: Double
     var defaultValue: Double
+    /// The named stops of a CHOICE setting, in slider order. A declaration with
+    /// options is not a magnitude — its gates test a treatment derived from the
+    /// stop, not the number. Mirrors `OrbModuleSettingDecl.options`
+    /// (lib/orb-modules/types.ts).
+    var options: [String]
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: OrbCodingKey.self)
@@ -628,6 +674,60 @@ struct OrbModuleSetting: Equatable, Decodable {
             min,
             max
         )
+        // A choice setting names every stop; a list that does not line up with
+        // min..max would caption a stop with another stop's name, so it is
+        // dropped and the setting stays a magnitude. Mirrors the web's
+        // normalizeOrbSettingOptions (lib/orb-modules/module-model.ts).
+        let rawOptions = ((try? container.decodeIfPresent([String].self, forKey: OrbCodingKey("options"))) ?? nil) ?? []
+        let cleaned = rawOptions.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let expectedStops = span > 0 ? Int((span / step).rounded()) + 1 : 1
+        options = cleaned.count >= 2
+            && cleaned.count == expectedStops
+            && cleaned.allSatisfy { !$0.isEmpty && $0.count <= 24 }
+            ? cleaned
+            : []
+    }
+}
+
+/// One setting's history: the ids an earlier version stored it under, and which
+/// of the setting's own options each stored value means. Mirrors the web's
+/// `OrbModuleSettingMigration` (lib/orb-modules/types.ts).
+struct OrbModuleSettingMigration: Equatable, Decodable {
+    var to: String
+    var from: [String]
+    var bands: [Band]
+
+    struct Band: Equatable, Decodable {
+        var min: Double
+        /// One of the setting's own stop names.
+        var name: String
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: OrbCodingKey.self)
+            min = (try? container.decodeIfPresent(Double.self, forKey: OrbCodingKey("min"))).flatMap { $0 } ?? 0
+            guard let text = (try? container.decodeIfPresent(String.self, forKey: OrbCodingKey("name"))).flatMap({ $0 }),
+                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "band names no stop"))
+            }
+            name = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
+    /// Bands decode leniently, one bad entry at a time: the web's
+    /// `normalizeOrbMigrationBands` drops an unusable band the same way, so a
+    /// single malformed entry cannot cost the module its whole history.
+    private struct FailableBand: Decodable {
+        let band: Band?
+        init(from decoder: Decoder) throws { band = try? Band(from: decoder) }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: OrbCodingKey.self)
+        to = (try? container.decodeIfPresent(String.self, forKey: OrbCodingKey("to"))).flatMap { $0 } ?? ""
+        from = (((try? container.decodeIfPresent([String].self, forKey: OrbCodingKey("from"))) ?? nil) ?? [])
+            .filter(isValidOrbModuleID)
+        let decoded = ((try? container.decodeIfPresent([FailableBand].self, forKey: OrbCodingKey("bands"))) ?? nil) ?? []
+        bands = decoded.compactMap(\.band).sorted { $0.min < $1.min }
     }
 }
 
@@ -637,6 +737,9 @@ struct OrbModule: Equatable, Decodable {
     var description: String
     var alertPulsePeriod: Double
     var settings: [OrbModuleSetting]
+    /// Saved values from an earlier shape of this module, so a renamed or
+    /// retyped setting keeps the owner's choice.
+    var settingMigrations: [OrbModuleSettingMigration]
     var layers: [OrbLayer]
 
     init(from decoder: Decoder) throws {
@@ -656,6 +759,16 @@ struct OrbModule: Equatable, Decodable {
         alertPulsePeriod = decodeClamped(container, "alertPulsePeriod", default: 1.2, 0.05, 60)
         let decodedSettings = ((try? container.decodeIfPresent([OrbModuleSetting].self, forKey: OrbCodingKey("settings"))) ?? nil) ?? []
         settings = Dictionary(grouping: decodedSettings, by: \.id).compactMap { $0.value.first }
+        // History for a setting this module renamed or retyped. An entry naming
+        // no declared setting, no legacy id or no band paints nothing and is
+        // dropped. Mirrors normalizeOrbSettingMigrations on the web.
+        let declaredIDs = Set(settings.map(\.id))
+        let decodedMigrations = ((try? container.decodeIfPresent([OrbModuleSettingMigration].self, forKey: OrbCodingKey("settingMigrations"))) ?? nil) ?? []
+        settingMigrations = decodedMigrations.filter { migration in
+            declaredIDs.contains(migration.to)
+                && !migration.from.isEmpty
+                && !migration.bands.isEmpty
+        }
         let decoded = ((try? container.decodeIfPresent([OrbLayerDecoder].self, forKey: OrbCodingKey("layers"))) ?? nil) ?? []
         layers = decoded.compactMap(\.layer)
         guard !layers.isEmpty else {
@@ -663,11 +776,137 @@ struct OrbModule: Equatable, Decodable {
         }
     }
 
-    func resolvedSettings(saved: [String: Double]?) -> [String: Double] {
-        Dictionary(uniqueKeysWithValues: settings.map { declaration in
-            let value = saved?[declaration.id] ?? declaration.defaultValue
-            return (declaration.id, clamped(value, declaration.min, declaration.max))
-        })
+    /// The saved group with this module's history applied: a setting whose own
+    /// id is absent takes the value an earlier id stored under it. Today's
+    /// value always wins; history only fills a gap.
+    func migratedSettings(saved: [String: Double]?) -> [String: Double] {
+        var migrated = saved ?? [:]
+        guard !settingMigrations.isEmpty else { return migrated }
+        let declarations = Dictionary(uniqueKeysWithValues: settings.map { ($0.id, $0) })
+        for migration in settingMigrations {
+            guard let declaration = declarations[migration.to],
+                  migrated[migration.to] == nil else { continue }
+            for legacyID in migration.from {
+                guard let legacy = migrated[legacyID], legacy.isFinite else { continue }
+                guard let value = bandValue(migration.bands, legacy: legacy, declaration: declaration) else { continue }
+                migrated[migration.to] = value
+                break
+            }
+        }
+        return migrated
+    }
+
+    /// Which band a legacy value falls in (the last whose floor it reaches), as
+    /// the declaration's own number.
+    private func bandValue(
+        _ bands: [OrbModuleSettingMigration.Band],
+        legacy: Double,
+        declaration: OrbModuleSetting
+    ) -> Double? {
+        let sorted = bands.sorted { $0.min < $1.min }
+        guard let band = sorted.last(where: { legacy >= $0.min }) else { return nil }
+        // A band names one of the setting's own stops; a name it no longer
+        // declares migrates nothing, leaving the setting at its own default.
+        guard let index = Self.optionIndex(declaration, named: band.name) else { return nil }
+        return Self.optionValue(declaration, index: index)
+    }
+
+    /// The resolved id a choice setting publishes its light/dark treatment
+    /// under, and that the module's gates name. Mirrors the web's
+    /// `orbResolvedSettingId` (lib/orb-modules/settings-model.ts).
+    static func resolvedSettingID(_ settingID: String) -> String {
+        settingID + "Resolved"
+    }
+
+    /// 1 = light, 0 = dark: the flag the resumed value a gate tests carries.
+    static let lightTreatment = 1.0
+    static let darkTreatment = 0.0
+
+    /// Every declared setting's value, defaults filled in, plus each CHOICE
+    /// setting's resolved treatment under `<id>Resolved`. `treatment` is the
+    /// device's own answer for a setting left on `auto`, and it is deliberately
+    /// REQUIRED: a caller that omitted it would silently draw the dark knob.
+    func resolvedSettings(saved: [String: Double]?, treatment: KnobSkinMode) -> [String: Double] {
+        let given = migratedSettings(saved: saved)
+        var resolved: [String: Double] = [:]
+        for declaration in settings {
+            let chosen = clamped(given[declaration.id] ?? declaration.defaultValue, declaration.min, declaration.max)
+            resolved[declaration.id] = chosen
+            guard declaration.options.count > 0 else { continue }
+            resolved[Self.resolvedSettingID(declaration.id)] = choiceTreatment(
+                declaration,
+                chosen: chosen,
+                treatment: treatment
+            )
+        }
+        return resolved
+    }
+
+    /// The value a choice's option at `index` sits at.
+    static func optionValue(_ declaration: OrbModuleSetting, index: Int) -> Double {
+        clamped(declaration.min + Double(index) * declaration.step, declaration.min, declaration.max)
+    }
+
+    /// The index of a choice's stop by name, matched case-insensitively: the
+    /// stops are user-facing labels, so a module may write "Auto" where the
+    /// resolver looks for "auto".
+    static func optionIndex(_ declaration: OrbModuleSetting, named name: String) -> Int? {
+        declaration.options.firstIndex { $0.caseInsensitiveCompare(name) == .orderedSame }
+    }
+
+    /// The option index a choice's value selects; nil when the value is
+    /// unusable. An index is not a value: clamping one as if it were lands on
+    /// whatever stop happens to sit at that number.
+    static func optionIndex(_ declaration: OrbModuleSetting, value: Double) -> Int? {
+        guard declaration.options.count > 0, value.isFinite else { return nil }
+        let index = Int(((value - declaration.min) / declaration.step).rounded())
+        return index >= 0 && index < declaration.options.count ? index : nil
+    }
+
+    /// The light/dark flag for a resolved choice: 1 when the option the choice
+    /// resolved to is `light`, 0 when it is `dark`, and the raw value for a
+    /// choice that names neither. Mirrors `resolveOrbChoiceTreatment`.
+    private func choiceTreatment(
+        _ declaration: OrbModuleSetting,
+        chosen: Double,
+        treatment: KnobSkinMode
+    ) -> Double {
+        let resolved = choiceValue(declaration, chosen: chosen, treatment: treatment)
+        guard let index = Self.optionIndex(declaration, value: resolved) else { return resolved }
+        switch declaration.options[index].lowercased() {
+        case "light": return Self.lightTreatment
+        case "dark": return Self.darkTreatment
+        default: return resolved
+        }
+    }
+
+    /// The VALUE a choice resolves to: the stop the owner pinned, or the
+    /// device's treatment when that is `auto`. Mirrors `resolveOrbChoiceValue`.
+    private func choiceValue(
+        _ declaration: OrbModuleSetting,
+        chosen: Double,
+        treatment: KnobSkinMode
+    ) -> Double {
+        guard let autoIndex = Self.optionIndex(declaration, named: "auto"),
+              let chosenIndex = Self.optionIndex(declaration, value: chosen),
+              chosenIndex == autoIndex else { return chosen }
+        let treatmentName = treatment == .light ? "light" : "dark"
+        // A stop the device's treatment does not name (and the `auto` stop
+        // itself) has not answered, so fall back the same way the web does.
+        if let index = Self.optionIndex(declaration, named: treatmentName), index != autoIndex {
+            return Self.optionValue(declaration, index: index)
+        }
+        return Self.optionValue(declaration, index: concreteFallbackIndex(declaration, autoIndex: autoIndex))
+    }
+
+    /// The author's own answer for "no device theme to defer to": their declared
+    /// default when that names a concrete stop, else the first stop that does.
+    /// Never `auto` itself, which would leave a gate an uninterpretable stop.
+    private func concreteFallbackIndex(_ declaration: OrbModuleSetting, autoIndex: Int) -> Int {
+        if let declared = Self.optionIndex(declaration, value: declaration.defaultValue), declared != autoIndex {
+            return declared
+        }
+        return declaration.options.indices.first { $0 != autoIndex } ?? 0
     }
 }
 
@@ -982,7 +1221,8 @@ func drawOrbModule(
     _ context: GraphicsContext,
     module: OrbModule,
     model: OrbAnimationModel,
-    frame: OrbFrame
+    frame: OrbFrame,
+    settings: [String: Double]
 ) {
     // One shared alert oscillation per frame: 0 when inactive, otherwise a
     // raised-cosine 0..1 wave over the module's alertPulsePeriod. Drives both
@@ -994,6 +1234,9 @@ func drawOrbModule(
     for (index, layer) in module.layers.enumerated() {
         let base = layer.base
         if !base.enabled { continue }
+        // Same gate rule as the Metal renderer: a paired treatment draws only
+        // while its setting is in range.
+        if !isOrbLayerGateOpen(base.enabledWhen, settings: settings) { continue }
 
         // Layer opacity = static opacity x pulse wave; alertOnly layers do
         // not render at all while the alert is inactive.

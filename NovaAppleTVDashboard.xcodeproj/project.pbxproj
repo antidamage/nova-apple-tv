@@ -6,6 +6,19 @@
 	objectVersion = 60;
 	objects = {
 
+
+AA0000000000000000000001 = {isa = PBXNativeTarget; buildConfigurationList = AA0000000000000000000002; buildPhases = (AA0000000000000000000003, AA0000000000000000000004); buildRules = (); dependencies = (AA0000000000000000000005); name = LandscapeUITests; productName = LandscapeUITests; productReference = AA0000000000000000000006; productType = "com.apple.product-type.bundle.ui-testing"; };
+AA0000000000000000000002 = {isa = XCConfigurationList; buildConfigurations = (AA0000000000000000000007, AA0000000000000000000008); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+AA0000000000000000000003 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (AA0000000000000000000009); runOnlyForDeploymentPostprocessing = 0; };
+AA0000000000000000000004 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+AA0000000000000000000005 = {isa = PBXTargetDependency; target = 01A1F0010000000000000001; targetProxy = AA000000000000000000000A; };
+AA0000000000000000000006 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LandscapeUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+AA0000000000000000000009 = {isa = PBXBuildFile; fileRef = AA000000000000000000000B; };
+AA000000000000000000000A = {isa = PBXContainerItemProxy; containerPortal = 01A1F0020000000000000001; proxyType = 1; remoteGlobalIDString = 01A1F0010000000000000001; remoteInfo = NovaAppleTVDashboard; };
+AA000000000000000000000B = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITests/LandscapeNavigationTests.swift; sourceTree = SOURCE_ROOT; };
+AA0000000000000000000007 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = nz.co.skull.NovaAppleTVDashboard.UITests; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = appletvos; SUPPORTED_PLATFORMS = "appletvos appletvsimulator"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = 3; TEST_TARGET_NAME = NovaAppleTVDashboard; TVOS_DEPLOYMENT_TARGET = 18.0;}; name = Debug; };
+AA0000000000000000000008 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = nz.co.skull.NovaAppleTVDashboard.UITests; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = appletvos; SUPPORTED_PLATFORMS = "appletvos appletvsimulator"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = 3; TEST_TARGET_NAME = NovaAppleTVDashboard; TVOS_DEPLOYMENT_TARGET = 18.0;}; name = Release; };
+
 /* Begin PBXBuildFile section */
 		01A1B0010000000000000001 /* NovaAppleTVDashboardApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0010000000000000001 /* NovaAppleTVDashboardApp.swift */; };
 		01A1B0020000000000000001 /* TVDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0020000000000000001 /* TVDashboardView.swift */; };
@@ -15,6 +28,9 @@
 		01A1B0060000000000000001 /* FluidBackgroundView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0060000000000000001 /* FluidBackgroundView.swift */; };
 		01A1B0070000000000000001 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0070000000000000001 /* AppConfig.swift */; };
 		01A1B0080000000000000002 /* OrbModules.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0080000000000000002 /* OrbModules.swift */; };
+		01A1B0F00000000000000203 /* OrbInfoConformanceCases.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0F00000000000000103 /* OrbInfoConformanceCases.swift */; };
+		01A1B0F00000000000000202 /* OrbInfoModules.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0F00000000000000102 /* OrbInfoModules.swift */; };
+		01A1B0F00000000000000201 /* OrbInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0F00000000000000101 /* OrbInfo.swift */; };
 		01A1B0080000000000000003 /* CameraFeedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0080000000000000003 /* CameraFeedView.swift */; };
 		01A1B0200000000000000001 /* DashboardComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0200000000000000001 /* DashboardComponents.swift */; };
 		01A1B0210000000000000001 /* DashboardFocus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0210000000000000001 /* DashboardFocus.swift */; };
@@ -31,7 +47,13 @@
 		01A1B0320000000000000001 /* ParitySelfTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0320000000000000001 /* ParitySelfTests.swift */; };
 		01A1B0330000000000000001 /* PhonoscopeModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0330000000000000001 /* PhonoscopeModels.swift */; };
 		01A1B0340000000000000001 /* PhonoscopeExpression.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0340000000000000001 /* PhonoscopeExpression.swift */; };
+		01A1B0410000000000000001 /* PhonoscopeStreamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0410000000000000001 /* PhonoscopeStreamView.swift */; };
+		01A1B0C40000000000000001 /* PhonoscopeStreamAttach.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0C40000000000000001 /* PhonoscopeStreamAttach.swift */; };
+		01A1B0400000000000000001 /* PhonoscopeStreamClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0400000000000000001 /* PhonoscopeStreamClient.swift */; };
 		01A1B0350000000000000001 /* PhonoscopeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0350000000000000001 /* PhonoscopeStore.swift */; };
+		01A1B0420000000000000001 /* PhonoscopeDrivers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0420000000000000001 /* PhonoscopeDrivers.swift */; };
+		01A1B0430000000000000001 /* PhonoscopeCentreTransition.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0430000000000000001 /* PhonoscopeCentreTransition.swift */; };
+		01A1B0440000000000000001 /* PresetPlaybackStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0440000000000000001 /* PresetPlaybackStore.swift */; };
 		01A1B0360000000000000001 /* PhonoscopeSimulation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0360000000000000001 /* PhonoscopeSimulation.swift */; };
 		01A1B0370000000000000001 /* MetalPhonoscopeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0370000000000000001 /* MetalPhonoscopeView.swift */; };
 		01A1B0380000000000000001 /* PhonoscopeShader.metal in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0380000000000000001 /* PhonoscopeShader.metal */; };
@@ -42,6 +64,108 @@
 		01A1B0120000000000000001 /* Rajdhani-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 01A1A0120000000000000001 /* Rajdhani-Bold.ttf */; };
 		01A1B0130000000000000001 /* ShareTechMono-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 01A1A0130000000000000001 /* ShareTechMono-Regular.ttf */; };
 		01A1B0140000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 01A1A0140000000000000001 /* Assets.xcassets */; };
+		01A1B0500000000000000001 /* NovaSRT in Frameworks */ = {isa = PBXBuildFile; productRef = 01A1F0500000000000000001 /* NovaSRT */; };
+		01A1B0A00000000000000001 /* RotaryEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0A00000000000000001; };
+		01A1B0A10000000000000001 /* ColorEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0A10000000000000001; };
+		01A1B0A20000000000000001 /* EncoderCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0A20000000000000001; };
+		01A1B0A30000000000000001 /* TimerEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0A30000000000000001; };
+		01A1B0A40000000000000001 /* TemperatureEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0A40000000000000001; };
+		01A1B0A50000000000000001 /* LandscapeNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0A50000000000000001; };
+		01A1B0A60000000000000001 /* LandscapeGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0A60000000000000001; };
+		01A1B0A70000000000000001 /* LandscapeDashboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0A70000000000000001; };
+		01A1B0A80000000000000001 /* LandscapeFocusLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0A80000000000000001; };
+		01A1B0B30000000000000001 /* RemoteInputHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0B30000000000000001; };
+		01A1B0C70000000000000001 /* RemoteTouchRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0C70000000000000001; };
+		01A1B0C60000000000000001 /* PressArbiterSelfTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0C60000000000000001; };
+		01A1B0C50000000000000001 /* PressArbiter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0C50000000000000001; };
+		01A1B0C00000000000000001 /* InputTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0C00000000000000001; };
+		01A1B0C30000000000000001 /* BandMapSelfTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0C30000000000000001; };
+		01A1B0C20000000000000001 /* SwipeEngineSelfTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0C20000000000000001; };
+		01A1B0C10000000000000001 /* BandMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0C10000000000000001; };
+		01A1B0B20000000000000001 /* RemoteSwipeEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0B20000000000000001; };
+		01A1B0B10000000000000001 /* SwipeRange.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0B10000000000000001; };
+		01A1B0B40000000000000001 /* QuickAccessColumn.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0B40000000000000001; };
+		01A1B0B50000000000000001 /* LandscapeSelfTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0B50000000000000001; };
+01A1B0BE0000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0BE0000000000000001; };
+01A1B0BF0000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0BF0000000000000001; };
+		01A1B0D00000000000000001 /* HostSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0D00000000000000001 /* HostSettings.swift */; };
+		01A1B0D10000000000000001 /* ThemeHostControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0D10000000000000001 /* ThemeHostControls.swift */; };
+		01A1B0D60000000000000001 /* RotaryEncoderTouch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0D60000000000000001 /* RotaryEncoderTouch.swift */; };
+		01A1B0D40000000000000001 /* TouchInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1A0D40000000000000001 /* TouchInput.swift */; };
+		01A1B0D20000000000000001 /* Settings.bundle in Resources */ = {isa = PBXBuildFile; fileRef = 01A1A0D20000000000000001 /* Settings.bundle */; };
+		01A1B1070000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0070000000000000001; };
+		01A1B1040000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0040000000000000001; };
+		01A1B1090000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0090000000000000001; };
+		01A1B1060000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0060000000000000001; };
+		01A1B1030000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0030000000000000001; };
+		01A1B1010000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0010000000000000001; };
+		01A1B1080000000000000002 = {isa = PBXBuildFile; fileRef = 01A1A0080000000000000002; };
+		01A1B1F00000000000000203 = {isa = PBXBuildFile; fileRef = 01A1A0F00000000000000103; };
+		01A1B1F00000000000000202 = {isa = PBXBuildFile; fileRef = 01A1A0F00000000000000102; };
+		01A1B1F00000000000000201 = {isa = PBXBuildFile; fileRef = 01A1A0F00000000000000101; };
+		01A1B1280000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0280000000000000001; };
+		01A1B1300000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0300000000000000001; };
+		01A1B1310000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0310000000000000001; };
+		01A1B1290000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0290000000000000001; };
+		01A1B1320000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0320000000000000001; };
+		01A1B1330000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0330000000000000001; };
+		01A1B1340000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0340000000000000001; };
+		01A1B1410000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0410000000000000001; };
+		01A1B1C40000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0C40000000000000001; };
+		01A1B1400000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0400000000000000001; };
+		01A1B1350000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0350000000000000001; };
+		01A1B1420000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0420000000000000001; };
+		01A1B1430000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0430000000000000001; };
+		01A1B1440000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0440000000000000001; };
+		01A1B1360000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0360000000000000001; };
+		01A1B1370000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0370000000000000001; };
+		01A1B1380000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0380000000000000001; };
+		01A1B1390000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0390000000000000001; };
+		01A1B1080000000000000003 = {isa = PBXBuildFile; fileRef = 01A1A0080000000000000003; };
+		01A1B1200000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0200000000000000001; };
+		01A1B1210000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0210000000000000001; };
+		01A1B1220000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0220000000000000001; };
+		01A1B1230000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0230000000000000001; };
+		01A1B1240000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0240000000000000001; };
+		01A1B1250000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0250000000000000001; };
+		01A1B1260000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0260000000000000001; };
+		01A1B1270000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0270000000000000001; };
+		01A1B1050000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0050000000000000001; };
+		01A1B1020000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0020000000000000001; };
+		01A1B1BF0000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0BF0000000000000001; };
+		01A1B1BE0000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0BE0000000000000001; };
+		01A1B1B50000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0B50000000000000001; };
+		01A1B1B40000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0B40000000000000001; };
+		01A1B1A80000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0A80000000000000001; };
+		01A1B1B30000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0B30000000000000001; };
+		01A1B1C70000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0C70000000000000001; };
+		01A1B1C60000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0C60000000000000001; };
+		01A1B1C50000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0C50000000000000001; };
+		01A1B1C00000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0C00000000000000001; };
+		01A1B1C30000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0C30000000000000001; };
+		01A1B1C20000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0C20000000000000001; };
+		01A1B1C10000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0C10000000000000001; };
+		01A1B1B20000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0B20000000000000001; };
+		01A1B1B10000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0B10000000000000001; };
+		01A1B1A70000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0A70000000000000001; };
+		01A1B1A60000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0A60000000000000001; };
+		01A1B1A50000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0A50000000000000001; };
+		01A1B1A40000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0A40000000000000001; };
+		01A1B1A30000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0A30000000000000001; };
+		01A1B1A20000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0A20000000000000001; };
+		01A1B1A10000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0A10000000000000001; };
+		01A1B1D00000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0D00000000000000001; };
+		01A1B1D10000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0D10000000000000001; };
+		01A1B1D60000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0D60000000000000001; };
+		01A1B1D40000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0D40000000000000001; };
+		01A1B1A00000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0A00000000000000001; };
+		01A1B1100000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0100000000000000001; };
+		01A1B1110000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0110000000000000001; };
+		01A1B1120000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0120000000000000001; };
+		01A1B1130000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0130000000000000001; };
+		01A1B1D20000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0D20000000000000001; };
+		01A1B1D50000000000000001 = {isa = PBXBuildFile; fileRef = 01A1A0D50000000000000001; };
+		01A1B1500000000000000001 /* NovaSRT in Frameworks */ = {isa = PBXBuildFile; productRef = 01A1F1500000000000000001 /* NovaSRT */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -54,6 +178,9 @@
 		01A1A0070000000000000001 /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
 		01A1A0080000000000000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		01A1A0080000000000000002 /* OrbModules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbModules.swift; sourceTree = "<group>"; };
+		01A1A0F00000000000000103 /* OrbInfoConformanceCases.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbInfoConformanceCases.swift; sourceTree = "<group>"; };
+		01A1A0F00000000000000102 /* OrbInfoModules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbInfoModules.swift; sourceTree = "<group>"; };
+		01A1A0F00000000000000101 /* OrbInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbInfo.swift; sourceTree = "<group>"; };
 		01A1A0080000000000000003 /* CameraFeedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraFeedView.swift; sourceTree = "<group>"; };
 		01A1A0200000000000000001 /* DashboardComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardComponents.swift; sourceTree = "<group>"; };
 		01A1A0210000000000000001 /* DashboardFocus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardFocus.swift; sourceTree = "<group>"; };
@@ -70,7 +197,13 @@
 		01A1A0320000000000000001 /* ParitySelfTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParitySelfTests.swift; sourceTree = "<group>"; };
 		01A1A0330000000000000001 /* PhonoscopeModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonoscopeModels.swift; sourceTree = "<group>"; };
 		01A1A0340000000000000001 /* PhonoscopeExpression.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonoscopeExpression.swift; sourceTree = "<group>"; };
+		01A1A0410000000000000001 /* PhonoscopeStreamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonoscopeStreamView.swift; sourceTree = "<group>"; };
+		01A1A0C40000000000000001 /* PhonoscopeStreamAttach.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonoscopeStreamAttach.swift; sourceTree = "<group>"; };
+		01A1A0400000000000000001 /* PhonoscopeStreamClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonoscopeStreamClient.swift; sourceTree = "<group>"; };
 		01A1A0350000000000000001 /* PhonoscopeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonoscopeStore.swift; sourceTree = "<group>"; };
+		01A1A0420000000000000001 /* PhonoscopeDrivers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonoscopeDrivers.swift; sourceTree = "<group>"; };
+		01A1A0430000000000000001 /* PhonoscopeCentreTransition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonoscopeCentreTransition.swift; sourceTree = "<group>"; };
+		01A1A0440000000000000001 /* PresetPlaybackStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetPlaybackStore.swift; sourceTree = "<group>"; };
 		01A1A0360000000000000001 /* PhonoscopeSimulation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonoscopeSimulation.swift; sourceTree = "<group>"; };
 		01A1A0370000000000000001 /* MetalPhonoscopeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalPhonoscopeView.swift; sourceTree = "<group>"; };
 		01A1A0380000000000000001 /* PhonoscopeShader.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = PhonoscopeShader.metal; sourceTree = "<group>"; };
@@ -82,6 +215,37 @@
 		01A1A0130000000000000001 /* ShareTechMono-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "ShareTechMono-Regular.ttf"; sourceTree = "<group>"; };
 		01A1A0140000000000000001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		01A1C0010000000000000001 /* NovaAppleTVDashboard.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NovaAppleTVDashboard.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		01A1A0A00000000000000001 /* RotaryEncoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RotaryEncoder.swift; sourceTree = "<group>"; };
+		01A1A0A10000000000000001 /* ColorEncoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorEncoder.swift; sourceTree = "<group>"; };
+		01A1A0A20000000000000001 /* EncoderCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EncoderCommands.swift; sourceTree = "<group>"; };
+		01A1A0A30000000000000001 /* TimerEncoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimerEncoder.swift; sourceTree = "<group>"; };
+		01A1A0A40000000000000001 /* TemperatureEncoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemperatureEncoder.swift; sourceTree = "<group>"; };
+		01A1A0A50000000000000001 /* LandscapeNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandscapeNavigation.swift; sourceTree = "<group>"; };
+		01A1A0A60000000000000001 /* LandscapeGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandscapeGroup.swift; sourceTree = "<group>"; };
+		01A1A0A70000000000000001 /* LandscapeDashboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandscapeDashboard.swift; sourceTree = "<group>"; };
+		01A1A0A80000000000000001 /* LandscapeFocusLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandscapeFocusLayout.swift; sourceTree = "<group>"; };
+		01A1A0B30000000000000001 /* RemoteInputHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteInputHost.swift; sourceTree = "<group>"; };
+		01A1A0C70000000000000001 /* RemoteTouchRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTouchRecognizer.swift; sourceTree = "<group>"; };
+		01A1A0C60000000000000001 /* PressArbiterSelfTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PressArbiterSelfTests.swift; sourceTree = "<group>"; };
+		01A1A0C50000000000000001 /* PressArbiter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PressArbiter.swift; sourceTree = "<group>"; };
+		01A1A0C00000000000000001 /* InputTrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputTrace.swift; sourceTree = "<group>"; };
+		01A1A0C30000000000000001 /* BandMapSelfTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BandMapSelfTests.swift; sourceTree = "<group>"; };
+		01A1A0C20000000000000001 /* SwipeEngineSelfTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwipeEngineSelfTests.swift; sourceTree = "<group>"; };
+		01A1A0C10000000000000001 /* BandMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BandMap.swift; sourceTree = "<group>"; };
+		01A1A0B20000000000000001 /* RemoteSwipeEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSwipeEngine.swift; sourceTree = "<group>"; };
+		01A1A0B10000000000000001 /* SwipeRange.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwipeRange.swift; sourceTree = "<group>"; };
+		01A1A0B40000000000000001 /* QuickAccessColumn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickAccessColumn.swift; sourceTree = "<group>"; };
+		01A1A0B50000000000000001 /* LandscapeSelfTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandscapeSelfTests.swift; sourceTree = "<group>"; };
+01A1A0BE0000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RotaryKnobFace.swift; sourceTree = "<group>"; };
+01A1A0BF0000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbInteractionModel.swift; sourceTree = "<group>"; };
+		01A1A0D00000000000000001 /* HostSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostSettings.swift; sourceTree = "<group>"; };
+		01A1A0D10000000000000001 /* ThemeHostControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeHostControls.swift; sourceTree = "<group>"; };
+		01A1A0D60000000000000001 /* RotaryEncoderTouch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RotaryEncoderTouch.swift; sourceTree = "<group>"; };
+		01A1A0D40000000000000001 /* TouchInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchInput.swift; sourceTree = "<group>"; };
+		01A1A0D20000000000000001 /* Settings.bundle */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.plug-in"; path = Settings.bundle; sourceTree = "<group>"; };
+		01A1A0D30000000000000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		01A1A0D50000000000000001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		01A1C1010000000000000001 /* NovaTouch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NovaTouch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -89,6 +253,15 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				01A1B0500000000000000001 /* NovaSRT in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		01A1D1010000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				01A1B1500000000000000001 /* NovaSRT in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -99,6 +272,7 @@
 			isa = PBXGroup;
 			children = (
 				01A1E0020000000000000001 /* NovaAppleTVDashboard */,
+				01A1E0050000000000000001 /* NovaTouch */,
 				01A1E0030000000000000001 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -116,6 +290,9 @@
 				01A1A0030000000000000001 /* Models.swift */,
 				01A1A0010000000000000001 /* NovaAppleTVDashboardApp.swift */,
 				01A1A0080000000000000002 /* OrbModules.swift */,
+				01A1A0F00000000000000103 /* OrbInfoConformanceCases.swift */,
+				01A1A0F00000000000000102 /* OrbInfoModules.swift */,
+				01A1A0F00000000000000101 /* OrbInfo.swift */,
 				01A1A0280000000000000001 /* OrbBuiltins.swift */,
 				01A1A0300000000000000001 /* MetalOrbView.swift */,
 				01A1A0310000000000000001 /* OrbShader.metal */,
@@ -123,7 +300,13 @@
 				01A1A0320000000000000001 /* ParitySelfTests.swift */,
 				01A1A0330000000000000001 /* PhonoscopeModels.swift */,
 				01A1A0340000000000000001 /* PhonoscopeExpression.swift */,
+				01A1A0410000000000000001 /* PhonoscopeStreamView.swift */,
+				01A1A0C40000000000000001 /* PhonoscopeStreamAttach.swift */,
+				01A1A0400000000000000001 /* PhonoscopeStreamClient.swift */,
 				01A1A0350000000000000001 /* PhonoscopeStore.swift */,
+				01A1A0420000000000000001 /* PhonoscopeDrivers.swift */,
+				01A1A0430000000000000001 /* PhonoscopeCentreTransition.swift */,
+				01A1A0440000000000000001 /* PresetPlaybackStore.swift */,
 				01A1A0360000000000000001 /* PhonoscopeSimulation.swift */,
 				01A1A0370000000000000001 /* MetalPhonoscopeView.swift */,
 				01A1A0380000000000000001 /* PhonoscopeShader.metal */,
@@ -139,6 +322,34 @@
 				01A1A0270000000000000001 /* ParkedControls.swift */,
 				01A1A0050000000000000001 /* Spectrum.swift */,
 				01A1A0020000000000000001 /* TVDashboardView.swift */,
+01A1A0BF0000000000000001,
+01A1A0BE0000000000000001,
+				01A1A0B50000000000000001 /* LandscapeSelfTests.swift */,
+				01A1A0B40000000000000001 /* QuickAccessColumn.swift */,
+				01A1A0A80000000000000001 /* LandscapeFocusLayout.swift */,
+				01A1A0B30000000000000001 /* RemoteInputHost.swift */,
+				01A1A0C70000000000000001 /* RemoteTouchRecognizer.swift */,
+				01A1A0C60000000000000001 /* PressArbiterSelfTests.swift */,
+				01A1A0C50000000000000001 /* PressArbiter.swift */,
+				01A1A0C00000000000000001 /* InputTrace.swift */,
+				01A1A0C30000000000000001 /* BandMapSelfTests.swift */,
+				01A1A0C20000000000000001 /* SwipeEngineSelfTests.swift */,
+				01A1A0C10000000000000001 /* BandMap.swift */,
+				01A1A0B20000000000000001 /* RemoteSwipeEngine.swift */,
+				01A1A0B10000000000000001 /* SwipeRange.swift */,
+				01A1A0A70000000000000001 /* LandscapeDashboard.swift */,
+				01A1A0A60000000000000001 /* LandscapeGroup.swift */,
+				01A1A0A50000000000000001 /* LandscapeNavigation.swift */,
+				01A1A0A40000000000000001 /* TemperatureEncoder.swift */,
+				01A1A0A30000000000000001 /* TimerEncoder.swift */,
+				01A1A0A20000000000000001 /* EncoderCommands.swift */,
+				01A1A0A10000000000000001 /* ColorEncoder.swift */,
+				01A1A0D00000000000000001 /* HostSettings.swift */,
+				01A1A0D10000000000000001 /* ThemeHostControls.swift */,
+				01A1A0D60000000000000001 /* RotaryEncoderTouch.swift */,
+				01A1A0D40000000000000001 /* TouchInput.swift */,
+				01A1A0D20000000000000001 /* Settings.bundle */,
+				01A1A0A00000000000000001 /* RotaryEncoder.swift */,
 			);
 			path = NovaAppleTVDashboard;
 			sourceTree = "<group>";
@@ -147,6 +358,8 @@
 			isa = PBXGroup;
 			children = (
 				01A1C0010000000000000001 /* NovaAppleTVDashboard.app */,
+				01A1C1010000000000000001 /* NovaTouch.app */,
+AA0000000000000000000006,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -160,6 +373,15 @@
 				01A1A0130000000000000001 /* ShareTechMono-Regular.ttf */,
 			);
 			path = Fonts;
+			sourceTree = "<group>";
+		};
+		01A1E0050000000000000001 /* NovaTouch */ = {
+			isa = PBXGroup;
+			children = (
+				01A1A0D50000000000000001 /* Assets.xcassets */,
+				01A1A0D30000000000000001 /* Info.plist */,
+			);
+			path = NovaTouch;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -178,8 +400,31 @@
 			dependencies = (
 			);
 			name = NovaAppleTVDashboard;
+			packageProductDependencies = (
+				01A1F0500000000000000001 /* NovaSRT */,
+			);
 			productName = NovaAppleTVDashboard;
 			productReference = 01A1C0010000000000000001 /* NovaAppleTVDashboard.app */;
+			productType = "com.apple.product-type.application";
+		};
+		01A1F1010000000000000001 /* NovaTouch */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 01A1F1040000000000000001 /* Build configuration list for PBXNativeTarget "NovaTouch" */;
+			buildPhases = (
+				01A1D1030000000000000001 /* Sources */,
+				01A1D1010000000000000001 /* Frameworks */,
+				01A1D1020000000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = NovaTouch;
+			packageProductDependencies = (
+				01A1F1500000000000000001 /* NovaSRT */,
+			);
+			productName = NovaTouch;
+			productReference = 01A1C1010000000000000001 /* NovaTouch.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -206,11 +451,16 @@
 				Base,
 			);
 			mainGroup = 01A1E0010000000000000001;
+			packageReferences = (
+				01A1F0510000000000000001 /* XCLocalSwiftPackageReference "Packages/NovaSRT" */,
+			);
 			productRefGroup = 01A1E0030000000000000001 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
+AA0000000000000000000001,
 				01A1F0010000000000000001 /* NovaAppleTVDashboard */,
+				01A1F1010000000000000001 /* NovaTouch */,
 			);
 		};
 /* End PBXProject section */
@@ -224,7 +474,21 @@
 				01A1B0100000000000000001 /* Rajdhani-Medium.ttf in Resources */,
 				01A1B0110000000000000001 /* Rajdhani-SemiBold.ttf in Resources */,
 				01A1B0120000000000000001 /* Rajdhani-Bold.ttf in Resources */,
+				01A1B0D20000000000000001 /* Settings.bundle in Resources */,
 				01A1B0130000000000000001 /* ShareTechMono-Regular.ttf in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		01A1D1020000000000000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				01A1B1100000000000000001,
+				01A1B1110000000000000001,
+				01A1B1120000000000000001,
+				01A1B1130000000000000001,
+				01A1B1D20000000000000001,
+				01A1B1D50000000000000001,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -242,6 +506,9 @@
 				01A1B0030000000000000001 /* Models.swift in Sources */,
 				01A1B0010000000000000001 /* NovaAppleTVDashboardApp.swift in Sources */,
 				01A1B0080000000000000002 /* OrbModules.swift in Sources */,
+				01A1B0F00000000000000203 /* OrbInfoConformanceCases.swift in Sources */,
+				01A1B0F00000000000000202 /* OrbInfoModules.swift in Sources */,
+				01A1B0F00000000000000201 /* OrbInfo.swift in Sources */,
 				01A1B0280000000000000001 /* OrbBuiltins.swift in Sources */,
 				01A1B0300000000000000001 /* MetalOrbView.swift in Sources */,
 				01A1B0310000000000000001 /* OrbShader.metal in Sources */,
@@ -249,7 +516,13 @@
 				01A1B0320000000000000001 /* ParitySelfTests.swift in Sources */,
 				01A1B0330000000000000001 /* PhonoscopeModels.swift in Sources */,
 				01A1B0340000000000000001 /* PhonoscopeExpression.swift in Sources */,
+				01A1B0410000000000000001 /* PhonoscopeStreamView.swift in Sources */,
+				01A1B0C40000000000000001 /* PhonoscopeStreamAttach.swift in Sources */,
+				01A1B0400000000000000001 /* PhonoscopeStreamClient.swift in Sources */,
 				01A1B0350000000000000001 /* PhonoscopeStore.swift in Sources */,
+				01A1B0420000000000000001 /* PhonoscopeDrivers.swift in Sources */,
+				01A1B0430000000000000001 /* PhonoscopeCentreTransition.swift in Sources */,
+				01A1B0440000000000000001 /* PresetPlaybackStore.swift in Sources */,
 				01A1B0360000000000000001 /* PhonoscopeSimulation.swift in Sources */,
 				01A1B0370000000000000001 /* MetalPhonoscopeView.swift in Sources */,
 				01A1B0380000000000000001 /* PhonoscopeShader.metal in Sources */,
@@ -265,6 +538,106 @@
 				01A1B0270000000000000001 /* ParkedControls.swift in Sources */,
 				01A1B0050000000000000001 /* Spectrum.swift in Sources */,
 				01A1B0020000000000000001 /* TVDashboardView.swift in Sources */,
+01A1B0BF0000000000000001,
+01A1B0BE0000000000000001,
+				01A1B0B50000000000000001 /* LandscapeSelfTests.swift in Sources */,
+				01A1B0B40000000000000001 /* QuickAccessColumn.swift in Sources */,
+				01A1B0A80000000000000001 /* LandscapeFocusLayout.swift in Sources */,
+				01A1B0B30000000000000001 /* RemoteInputHost.swift in Sources */,
+				01A1B0C70000000000000001 /* RemoteTouchRecognizer.swift in Sources */,
+				01A1B0C60000000000000001 /* PressArbiterSelfTests.swift in Sources */,
+				01A1B0C50000000000000001 /* PressArbiter.swift in Sources */,
+				01A1B0C00000000000000001 /* InputTrace.swift in Sources */,
+				01A1B0C30000000000000001 /* BandMapSelfTests.swift in Sources */,
+				01A1B0C20000000000000001 /* SwipeEngineSelfTests.swift in Sources */,
+				01A1B0C10000000000000001 /* BandMap.swift in Sources */,
+				01A1B0B20000000000000001 /* RemoteSwipeEngine.swift in Sources */,
+				01A1B0B10000000000000001 /* SwipeRange.swift in Sources */,
+				01A1B0A70000000000000001 /* LandscapeDashboard.swift in Sources */,
+				01A1B0A60000000000000001 /* LandscapeGroup.swift in Sources */,
+				01A1B0A50000000000000001 /* LandscapeNavigation.swift in Sources */,
+				01A1B0A40000000000000001 /* TemperatureEncoder.swift in Sources */,
+				01A1B0A30000000000000001 /* TimerEncoder.swift in Sources */,
+				01A1B0A20000000000000001 /* EncoderCommands.swift in Sources */,
+				01A1B0A10000000000000001 /* ColorEncoder.swift in Sources */,
+				01A1B0D00000000000000001 /* HostSettings.swift in Sources */,
+				01A1B0D10000000000000001 /* ThemeHostControls.swift in Sources */,
+				01A1B0D60000000000000001 /* RotaryEncoderTouch.swift in Sources */,
+				01A1B0D40000000000000001 /* TouchInput.swift in Sources */,
+				01A1B0A00000000000000001 /* RotaryEncoder.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		01A1D1030000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				01A1B1070000000000000001,
+				01A1B1040000000000000001,
+				01A1B1090000000000000001,
+				01A1B1060000000000000001,
+				01A1B1030000000000000001,
+				01A1B1010000000000000001,
+				01A1B1080000000000000002,
+				01A1B1F00000000000000203,
+				01A1B1F00000000000000202,
+				01A1B1F00000000000000201,
+				01A1B1280000000000000001,
+				01A1B1300000000000000001,
+				01A1B1310000000000000001,
+				01A1B1290000000000000001,
+				01A1B1320000000000000001,
+				01A1B1330000000000000001,
+				01A1B1340000000000000001,
+				01A1B1410000000000000001,
+				01A1B1C40000000000000001,
+				01A1B1400000000000000001,
+				01A1B1350000000000000001,
+				01A1B1420000000000000001,
+				01A1B1430000000000000001,
+				01A1B1440000000000000001,
+				01A1B1360000000000000001,
+				01A1B1370000000000000001,
+				01A1B1380000000000000001,
+				01A1B1390000000000000001,
+				01A1B1080000000000000003,
+				01A1B1200000000000000001,
+				01A1B1210000000000000001,
+				01A1B1220000000000000001,
+				01A1B1230000000000000001,
+				01A1B1240000000000000001,
+				01A1B1250000000000000001,
+				01A1B1260000000000000001,
+				01A1B1270000000000000001,
+				01A1B1050000000000000001,
+				01A1B1020000000000000001,
+				01A1B1BF0000000000000001,
+				01A1B1BE0000000000000001,
+				01A1B1B50000000000000001,
+				01A1B1B40000000000000001,
+				01A1B1A80000000000000001,
+				01A1B1B30000000000000001,
+				01A1B1C70000000000000001,
+				01A1B1C60000000000000001,
+				01A1B1C50000000000000001,
+				01A1B1C00000000000000001,
+				01A1B1C30000000000000001,
+				01A1B1C20000000000000001,
+				01A1B1C10000000000000001,
+				01A1B1B20000000000000001,
+				01A1B1B10000000000000001,
+				01A1B1A70000000000000001,
+				01A1B1A60000000000000001,
+				01A1B1A50000000000000001,
+				01A1B1A40000000000000001,
+				01A1B1A30000000000000001,
+				01A1B1A20000000000000001,
+				01A1B1A10000000000000001,
+				01A1B1D00000000000000001,
+				01A1B1D10000000000000001,
+				01A1B1D60000000000000001,
+				01A1B1D40000000000000001,
+				01A1B1A00000000000000001,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -437,6 +810,60 @@
 			};
 			name = Release;
 		};
+		01A1F1070000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = NovaTouch/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = nz.co.skull.NovaTouch;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		01A1F1080000000000000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = NovaTouch/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = nz.co.skull.NovaTouch;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -458,7 +885,36 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		01A1F1040000000000000001 /* Build configuration list for PBXNativeTarget "NovaTouch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				01A1F1070000000000000001 /* Debug */,
+				01A1F1080000000000000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		01A1F0510000000000000001 /* XCLocalSwiftPackageReference "Packages/NovaSRT" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/NovaSRT;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		01A1F0500000000000000001 /* NovaSRT */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 01A1F0510000000000000001 /* XCLocalSwiftPackageReference "Packages/NovaSRT" */;
+			productName = NovaSRT;
+		};
+		01A1F1500000000000000001 /* NovaSRT */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 01A1F0510000000000000001 /* XCLocalSwiftPackageReference "Packages/NovaSRT" */;
+			productName = NovaSRT;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 01A1F0020000000000000001 /* Project object */;
 }

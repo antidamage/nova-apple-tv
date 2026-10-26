@@ -182,7 +182,10 @@ final class MetalOrbRenderer: NSObject, MTKViewDelegate {
         let dt = min(0.1, max(0, absoluteNow - previousFrameTime))
         previousFrameTime = absoluteNow
         let settings = input.module.resolvedSettings(
-            saved: input.theme.avatar.orbModuleSettings[input.module.id]
+            saved: input.theme.avatar.orbModuleSettings[input.module.id],
+            // The orb's knob follows the device's knob skin when a module
+            // setting is left on auto, so the orb and the dials beside it agree.
+            treatment: input.theme.knobSkinMode
         )
         let speechEnvelope = input.speech?.envelope(
             at: absoluteNow,
@@ -295,6 +298,11 @@ final class MetalOrbRenderer: NSObject, MTKViewDelegate {
         for (layerIndex, layer) in module.layers.enumerated() {
             let base = layer.base
             guard base.enabled else { continue }
+            // Paired treatments (the Tech skin's light and dark knob) are gated
+            // on the module's own settings; exactly one of each pair draws. Both
+            // halves used to draw, the light one last, so a dark-knob orb
+            // rendered as a light-knob one.
+            guard isOrbLayerGateOpen(base.enabledWhen, settings: settings) else { continue }
             var opacity = base.opacity
             if let pulse = base.pulse {
                 if pulse.alertOnly && !alertActive { continue }
