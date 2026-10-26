@@ -53,6 +53,7 @@ enum RemoteDirection: Equatable {
     case up
     case down
 
+    #if os(tvOS)
     init?(_ direction: MoveCommandDirection) {
         switch direction {
         case .left: self = .left
@@ -62,6 +63,7 @@ enum RemoteDirection: Equatable {
         @unknown default: return nil
         }
     }
+    #endif
 
     func isOpposite(of other: RemoteDirection) -> Bool {
         switch (self, other) {
@@ -87,6 +89,9 @@ struct DashboardEditMove: Equatable {
 struct DashboardEditCancel: Equatable {
     let serial: Int
     let focus: DashboardFocus
+    /// The phone's tap while a control is unlocked: end the edit keeping the
+    /// draft, as Select on the control does, rather than discarding it as Back does.
+    var commit = false
 }
 
 /// Requires two root-level Back presses close together before allowing the app
@@ -129,167 +134,6 @@ struct ExitCommandShield {
 
     func contains(_ now: TimeInterval) -> Bool {
         now < suppressUntil
-    }
-}
-
-/// Tracks an in-flight navigation gesture so a control must be "left" for a
-/// short dwell before focus detaches — see `RemoteMoveGate`.
-private struct PendingRemoteNavigation {
-    let direction: RemoteDirection
-    let focus: DashboardFocus
-    let startedAt: TimeInterval
-}
-
-/// Debounces and rate-limits remote moves so the trackpad feels deliberate.
-///
-/// Three behaviours layer here:
-///  - a per-direction minimum interval (looser for navigation, tighter for
-///    edit so sliders track a continuous swipe),
-///  - a detachment dwell so a control isn't abandoned on the very first frame
-///    of a swipe (navigation only), and
-///  - an opposite-direction "flick" guard that drops a reversal landing within
-///    100ms of the previous accepted move.
-final class RemoteMoveGate {
-    private var lastAcceptedAt: TimeInterval?
-    private var lastDirection: RemoteDirection?
-    private var pendingNavigation: PendingRemoteNavigation?
-
-    func accept(direction: RemoteDirection, focus: DashboardFocus?, isEditing: Bool) -> Bool {
-        let now = Date().timeIntervalSinceReferenceDate
-        if !isEditing, let focus {
-            guard navigationPassedDetachmentThreshold(direction: direction, focus: focus, now: now) else {
-                return false
-            }
-        } else {
-            pendingNavigation = nil
-        }
-
-        guard let lastAcceptedAt else {
-            self.lastAcceptedAt = now
-            lastDirection = direction
-            pendingNavigation = nil
-            return true
-        }
-
-        if let lastDirection,
-           lastDirection.isOpposite(of: direction),
-           now - lastAcceptedAt < 0.10 {
-            pendingNavigation = nil
-            return false
-        }
-
-        let minimumInterval: TimeInterval
-        if isEditing {
-            // Low so sliders feel responsive to a continuous swipe.
-            minimumInterval = 0.05
-        } else if lastDirection == direction {
-            minimumInterval = 0.22
-        } else {
-            minimumInterval = 0.26
-        }
-
-        guard now - lastAcceptedAt >= minimumInterval else { return false }
-        self.lastAcceptedAt = now
-        lastDirection = direction
-        pendingNavigation = nil
-        return true
-    }
-
-    private func navigationPassedDetachmentThreshold(direction: RemoteDirection, focus: DashboardFocus, now: TimeInterval) -> Bool {
-        let threshold: TimeInterval = 0.08
-        let expiry: TimeInterval = 0.44
-
-        guard let pendingNavigation,
-              pendingNavigation.direction == direction,
-              pendingNavigation.focus == focus,
-              now - pendingNavigation.startedAt <= expiry
-        else {
-            self.pendingNavigation = PendingRemoteNavigation(direction: direction, focus: focus, startedAt: now)
-            return false
-        }
-
-        return now - pendingNavigation.startedAt >= threshold
-    }
-}
-
-// MARK: - Sticky boundaries
-
-/// The two kinds of navigation boundary that resist an accidental swipe. Crossing
-/// either requires several deliberate moves in a row (vs one for an ordinary
-/// move), so a single stray diagonal flick can't cascade out of a menu or jump
-/// between device groups. `requiredCharge` is "how many moves to cross" — the
-/// "extra movement" multiplier the rest of navigation is measured against.
-enum StickyBoundaryKind: Equatable {
-    /// Reversing one level *out* of the menu hierarchy by swipe (collapsing a
-    /// control group back to its title, or a room back to the zone ribbon). The
-    /// physical Menu/Back button is never gated — only the fuzzy trackpad swipe.
-    case hierarchy
-    /// Switching between component groups inside the final level — e.g. crossing
-    /// from the air conditioner to the panel heater, vs moving control-to-control
-    /// inside one device.
-    case componentGroup
-
-    /// Moves required to cross, including the one that lands on the boundary.
-    /// ~3–4× an ordinary move, which crosses on the first move.
-    var requiredCharge: Int {
-        switch self {
-        case .hierarchy: return 4
-        case .componentGroup: return 3
-        }
-    }
-}
-
-/// Identity of a pending boundary crossing. Repeated moves only accumulate charge
-/// while the same element is pushing the same way against the same kind of
-/// boundary; anything else starts a fresh count.
-struct StickyBoundary: Equatable {
-    let from: DashboardFocus
-    let direction: RemoteDirection
-    let kind: StickyBoundaryKind
-}
-
-/// Accumulates "resistance" against a sticky boundary so it takes several moves
-/// in a row to cross. Charge resets when the user pushes somewhere else, lets the
-/// remote rest (`resetInterval`), or successfully crosses — so the stickiness is
-/// per-gesture and never leaks into the next one.
-final class StickyBoundaryGate {
-    private var pending: StickyBoundary?
-    private var charge = 0
-    private var lastChargeAt: TimeInterval = 0
-    private let resetInterval: TimeInterval = 0.5
-
-    enum Decision: Equatable {
-        case cross
-        /// Held this time; `progress` is 0…1 toward crossing (for tug feedback).
-        case resist(progress: Double)
-    }
-
-    /// Registers one accepted move against `boundary` and reports whether that was
-    /// enough to cross. A move that matches the in-flight boundary (same element,
-    /// direction, kind) within `resetInterval` builds on it; otherwise the count
-    /// restarts at 1.
-    func register(_ boundary: StickyBoundary, now: TimeInterval = Date().timeIntervalSinceReferenceDate) -> Decision {
-        if pending != boundary || now - lastChargeAt > resetInterval {
-            pending = boundary
-            charge = 1
-        } else {
-            charge += 1
-        }
-        lastChargeAt = now
-
-        let required = boundary.kind.requiredCharge
-        if charge >= required {
-            reset()
-            return .cross
-        }
-        return .resist(progress: Double(charge) / Double(required))
-    }
-
-    /// Clears any in-flight charge. Called after every ordinary (non-sticky) move
-    /// and after a crossing so a new gesture starts from zero.
-    func reset() {
-        pending = nil
-        charge = 0
     }
 }
 
@@ -453,9 +297,9 @@ func climateFocusRows(zone: DashboardZone) -> [[DashboardFocus]] {
             .action(zone.id, "aircon-off")
         ])
 
-        // Visual order: HEAT (top), FAN, COOL (bottom).
-        let modeRow = ["heat", "fan_only", "cool"]
-            .filter { aircon.hvacModes.isEmpty || aircon.hvacModes.contains($0) }
+        // Visual order: HEAT (top), FAN, DRY (native only), COOL (bottom).
+        let modeRow = ["heat", "fan_only", "dry", "cool"]
+            .filter { $0 == "dry" ? aircon.hvacModes.contains("dry") : (aircon.hvacModes.isEmpty || aircon.hvacModes.contains($0)) }
             .map { DashboardFocus.action(zone.id, "mode-\($0)") }
         rows.append(modeRow)
 

@@ -155,12 +155,8 @@ struct OutsideCameraPanel: View {
                     }
                 }
                 // Highlight border tracks focus, matching every other control.
-                .overlay {
-                    Rectangle().stroke(
-                        isFocused ? store.theme.highlight.color : store.theme.borderColor,
-                        lineWidth: isFocused ? 3 : 1
-                    )
-                }
+                .overlay { Rectangle().stroke(store.theme.borderColor, lineWidth: 1) }
+                .focusOutline(isFocused, Rectangle())
             }
             .frame(maxHeight: .infinity)
         }
@@ -202,6 +198,9 @@ struct OutsideCameraPanel: View {
             var request = URLRequest(url: url)
             request.cachePolicy = .reloadIgnoringLocalCacheData
             request.timeoutInterval = 4
+            for (field, value) in AppConfig.cameraHeaders {
+                request.setValue(value, forHTTPHeaderField: field)
+            }
             if let (data, response) = try? await URLSession.shared.data(for: request),
                let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode,
                let decoded = try? JSONDecoder().decode(CameraFeedStatus.self, from: data) {
@@ -258,11 +257,7 @@ struct WeatherPanelTV: View {
         .frame(maxHeight: .infinity)
         // Passive surface: focusable so it can be swiped onto (scrolls into
         // view) and shows a highlight border, but has no Select action.
-        .overlay {
-            CutCornerShape(cut: 18)
-                .stroke(store.theme.highlight.color, lineWidth: 3)
-                .opacity(isFocused ? 1 : 0)
-        }
+        .focusOutline(isFocused, CutCornerShape(cut: 18))
         .dashboardFocusTarget(focus, equals: focusValue)
     }
 }
@@ -300,11 +295,7 @@ struct NetworkStatusPanel: View {
         .frame(maxHeight: .infinity)
         // Passive surface: focusable so it can be swiped onto / scrolled into
         // view and highlighted, with no Select action.
-        .overlay {
-            CutCornerShape(cut: 18)
-                .stroke(store.theme.highlight.color, lineWidth: 3)
-                .opacity(isFocused ? 1 : 0)
-        }
+        .focusOutline(isFocused, CutCornerShape(cut: 18))
         .dashboardFocusTarget(focus, equals: focusValue)
     }
 }

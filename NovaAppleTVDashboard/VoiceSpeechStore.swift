@@ -89,6 +89,9 @@ final class VoiceSpeechStore: ObservableObject {
     private let decoder = JSONDecoder()
     private var isRunning = false
     private var reconnectDelay = 2.0
+    /// Bumped by every connect and stop, so a cancelled stream's late callbacks
+    /// (after a host change restarts the store) cannot touch its replacement.
+    private var generation = 0
 
     func start() {
         guard !isRunning else { return }
@@ -98,6 +101,8 @@ final class VoiceSpeechStore: ObservableObject {
 
     func stop() {
         isRunning = false
+        generation += 1
+        reconnectDelay = 2
         reconnectTask?.cancel()
         reconnectTask = nil
         streamSession?.invalidateAndCancel()
@@ -121,20 +126,24 @@ final class VoiceSpeechStore: ObservableObject {
         request.timeoutInterval = 60
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
 
+        generation += 1
+        let mine = generation
         let delegate = VoiceSpeechStreamDelegate(
             onOpen: { [weak self] in
                 Task { @MainActor in
-                    self?.reconnectDelay = 2
+                    guard let self, self.generation == mine else { return }
+                    self.reconnectDelay = 2
                 }
             },
             onEvent: { [weak self] name, data in
                 Task { @MainActor in
-                    self?.dispatchEvent(name: name, data: data)
+                    guard let self, self.generation == mine else { return }
+                    self.dispatchEvent(name: name, data: data)
                 }
             },
             onComplete: { [weak self] in
                 Task { @MainActor in
-                    guard let self else { return }
+                    guard let self, self.generation == mine else { return }
                     self.streamSession = nil
                     self.streamDelegate = nil
                     guard self.isRunning else { return }

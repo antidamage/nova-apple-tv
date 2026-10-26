@@ -9,3 +9,17 @@ gui-build.log
 Local.xcconfig
 Config.local.xcconfig
 deploy.local.ps1
+
+# Xcode build output beyond DerivedData
+build/
+*.ipa
+*.dSYM/
+*.xcresult/
+
+# Cygwin/Git-Bash crash dumps (created anywhere a bash tool crashes).
+bash.exe.stackdump
+**/bash.exe.stackdump
+
+# OS/editor noise
+Thumbs.db
+*.swp

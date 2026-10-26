@@ -1,3 +1,4 @@
+import AVFoundation
 import AVKit
 import SwiftUI
 
@@ -20,6 +21,17 @@ struct CameraFeedStatus: Decodable {
     let deviceConnected: Bool?
 }
 
+/// AVURLAsset options carrying the standalone camera host's bearer token
+/// (`AppConfig.cameraHeaders`), when one is configured. Empty for the
+/// dashboard-proxy fallback, which needs no token of its own.
+private func assetOptions(for url: URL) -> [String: Any] {
+    let headers = AppConfig.cameraHeaders
+    guard !headers.isEmpty else { return [:] }
+    // Referenced by its raw key rather than the AVFoundation Swift-overlay
+    // constant name, which has moved/been renamed across SDK versions.
+    return ["AVURLAssetHTTPHeaderFieldsKey": headers]
+}
+
 /// Full-screen native player for a camera feed. Presented when the inline tile
 /// is selected: `AVPlayerViewController` is the canonical tvOS video surface,
 /// so the user gets the platform's own transport — play/pause on Select,
@@ -31,7 +43,8 @@ struct CameraFullScreenPlayer: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
-        let player = AVPlayer(url: url)
+        let asset = AVURLAsset(url: url, options: assetOptions(for: url))
+        let player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
         player.isMuted = true
         controller.player = player
         // Show the native transport bar; live HLS gets the system LIVE badge
@@ -105,7 +118,8 @@ final class CameraPlayerUIView: UIView {
     private func start(url: URL) {
         teardownPlayback()
 
-        let item = AVPlayerItem(url: url)
+        let asset = AVURLAsset(url: url, options: assetOptions(for: url))
+        let item = AVPlayerItem(asset: asset)
         let player = AVPlayer(playerItem: item)
         player.isMuted = true
         player.automaticallyWaitsToMinimizeStalling = true

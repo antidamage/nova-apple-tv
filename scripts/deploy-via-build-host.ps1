@@ -1,3 +1,15 @@
+# Manual deploy: build, install, launch and verify the tvOS app on the Home
+# Theatre Apple TV by hand.
+#
+# The normal path is the CI, not this script: push the change (open a PR, merge
+# it into main) and a Forgejo Action on the build Mac
+# builds the merged commit and stages the signed app, and a deployer installs it
+# the next time the set is awake. Agents should let that happen rather than
+# deploying by hand; the owner runs this when she wants one specific build on the
+# set. See docs/CI-APPLETV-CI.md.
+#
+# It does not take the CI's lock (~/Build/nova-appletv-ci/lock on the build Mac),
+# so do not run it while a CI build is in progress.
 param(
     [Parameter(Mandatory = $true)]
     [string]$BuildHost,

@@ -50,18 +50,28 @@ struct CutCornerShape: Shape {
 extension View {
     /// Applies the three-state (idle / active / focused) chrome shared by every
     /// rectangular control surface.
-    func controlChrome(isFocused: Bool, isActive: Bool = false) -> some View {
-        modifier(ControlChrome(isFocused: isFocused, isActive: isActive))
+    func controlChrome(
+        isFocused: Bool,
+        isActive: Bool = false,
+        focusedBackground: Color? = nil,
+        focusedBorder: Color? = nil
+    ) -> some View {
+        modifier(ControlChrome(
+            isFocused: isFocused,
+            isActive: isActive,
+            focusedBackground: focusedBackground,
+            focusedBorder: focusedBorder
+        ))
     }
 
     /// Binds a control to the dashboard focus state AND tags it with a matching
-    /// scroll id. The dashboard wraps its controls in a horizontal ScrollView and
-    /// calls `proxy.scrollTo(focus)` whenever focus moves, so every control that
-    /// participates in remote focus travel must carry this id — that is what
-    /// keeps the focused control (e.g. the panel heater beside the air
-    /// conditioner) fully on screen as you swipe through a surface.
+    /// scroll id. The landscape band scrolls to the focused control's COLUMN
+    /// (`band-column-<panel>-<column>`, centred) or to its start for the orb,
+    /// and falls back to this id for a control the band map does not place
+    /// (LandscapeDashboard, `scroll(_:to:)`; specs/band-navigation.md).
     func dashboardFocus(_ binding: FocusState<DashboardFocus?>.Binding, equals value: DashboardFocus) -> some View {
-        focused(binding, equals: value).id(value)
+        focused(binding, equals: value).id(value).accessibilityIdentifier(value.accessibilityID)
+            .swipeLean(binding, equals: value)
     }
 
     /// A passive focusable surface: hit-testable, joins the focus graph and the
@@ -88,8 +98,51 @@ extension View {
         perform action: @escaping () -> Void
     ) -> some View {
         dashboardFocusTarget(focus, equals: value)
-            .onTapGesture(perform: action)
+            .onTapGesture {
+                #if os(iOS)
+                // A finger lands on the control itself: it takes focus first, as
+                // the remote would have had to move there before Select.
+                focus.wrappedValue = value
+                #endif
+                action()
+            }
             .accessibilityAddTraits(.isButton)
+    }
+}
+
+/// The focus outline: a thick ring in the theme's highlight colour standing just
+/// outside the control, with a soft glow, so the control the remote is on can be
+/// picked out from across the room. Every focusable control draws this one.
+struct FocusOutline<S: Shape>: ViewModifier {
+    @EnvironmentObject private var store: DashboardStore
+    let isFocused: Bool
+    let shape: S
+    var color: Color? = nil
+    var outset: CGFloat = 7
+
+    static var lineWidth: CGFloat { 6 }
+
+    func body(content: Content) -> some View {
+        let tint = color ?? store.theme.highlight.color
+        content.overlay {
+            ZStack {
+                // A thin edge in the text colour on either side of the ring keeps
+                // it legible when the highlight is close to the panel colour.
+                shape.stroke(store.theme.text.opacity(0.55), lineWidth: Self.lineWidth + 3)
+                shape.stroke(tint, lineWidth: Self.lineWidth)
+            }
+            .padding(-outset)
+            .shadow(color: tint.opacity(0.8), radius: 12)
+            .opacity(isFocused ? 1 : 0)
+            .allowsHitTesting(false)
+        }
+        .animation(.easeOut(duration: 0.12), value: isFocused)
+    }
+}
+
+extension View {
+    func focusOutline<S: Shape>(_ isFocused: Bool, _ shape: S, color: Color? = nil, outset: CGFloat = 7) -> some View {
+        modifier(FocusOutline(isFocused: isFocused, shape: shape, color: color, outset: outset))
     }
 }
 
@@ -101,6 +154,8 @@ struct ControlChrome: ViewModifier {
     @EnvironmentObject private var store: DashboardStore
     let isFocused: Bool
     let isActive: Bool
+    let focusedBackground: Color?
+    let focusedBorder: Color?
 
     func body(content: Content) -> some View {
         content
@@ -109,6 +164,7 @@ struct ControlChrome: ViewModifier {
             .overlay {
                 Rectangle().stroke(border, lineWidth: isFocused || isActive ? 2 : 1)
             }
+            .focusOutline(isFocused, Rectangle())
     }
 
     private var foreground: Color {
@@ -118,13 +174,13 @@ struct ControlChrome: ViewModifier {
     }
 
     private var background: Color {
-        if isFocused { return store.theme.highlight.color }
+        if isFocused { return focusedBackground ?? store.theme.highlight.color }
         if isActive { return store.theme.accent.color }
         return store.theme.panelSoft.color.opacity(0.46)
     }
 
     private var border: Color {
-        if isFocused { return store.theme.highlight.color }
+        if isFocused { return focusedBorder ?? store.theme.highlight.color }
         if isActive { return store.theme.accent.color }
         return store.theme.borderColor
     }
@@ -227,6 +283,8 @@ struct ControlButton: View {
     let symbol: String
     let isFocused: Bool
     var isActive = false
+    var focusedBackground: Color? = nil
+    var focusedBorder: Color? = nil
     let action: () -> Void
 
     var body: some View {
@@ -241,7 +299,12 @@ struct ControlButton: View {
         // Fill the frame we're given so the chrome (border/bg) fills a square
         // slot instead of shrinking to content height and leaving a gap.
         .frame(maxWidth: .infinity, minHeight: 70, maxHeight: .infinity)
-        .controlChrome(isFocused: isFocused, isActive: isActive)
+        .controlChrome(
+            isFocused: isFocused,
+            isActive: isActive,
+            focusedBackground: focusedBackground,
+            focusedBorder: focusedBorder
+        )
         .contentShape(Rectangle())
         .focusable(true)
         .focusEffectDisabled()
@@ -311,6 +374,9 @@ struct RibbonTitleButton: View {
             CutCornerShape(cut: 16)
                 .stroke(lineColor, lineWidth: isFocused ? 3 : 1)
         }
+        // The selected row is filled too, so the row the remote is on also wears
+        // the focus outline.
+        .focusOutline(isFocused, CutCornerShape(cut: 16), outset: 4)
         .overlay(alignment: .topLeading) {
             Rectangle()
                 .fill(store.theme.highlight.color)
@@ -320,7 +386,12 @@ struct RibbonTitleButton: View {
         .focusable(true)
         .dashboardFocus(focus, equals: focusValue)
         .focusEffectDisabled()
-        .onTapGesture(perform: action)
+        .onTapGesture {
+            #if os(iOS)
+            focus.wrappedValue = focusValue
+            #endif
+            action()
+        }
         .accessibilityAddTraits(.isButton)
     }
 

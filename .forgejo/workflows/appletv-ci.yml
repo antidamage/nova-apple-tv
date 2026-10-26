@@ -1,0 +1,102 @@
+# Forgejo Action: build the Apple TV app on the Indium Mac and stage it.
+#
+# This is the CI that drives the Home Theatre Apple TV's app. It runs on the
+# household's own Forgejo runner on Indium (`mac-appletv`), so nothing about the
+# build, the code, the logs or the deployment leaves the house:
+#
+#   * the job builds and stages a signed .app - it never touches the set
+#   * scripts/ci/deploy-when-awake.sh installs it, but only while the Apple TV is
+#     awake, and only when the staged build is newer than the one on the device
+#
+# A burst of pushes still ends in one deployment: only the newest staged build is
+# ever installed, and a run whose commit has been superseded on the branch stops
+# before it clones anything, so a burst costs one build rather than one per push.
+#
+# Trust: automatic runs only ever come from the branch below, but the job runs the
+# checkout's own scripts as the login user (the signing keychain needs it), so
+# anyone who can push to a branch and dispatch a run can run code on Indium. Same
+# trust level as the manual deploy scripts, which have always done exactly that.
+#
+# See docs/CI-APPLETV-CI.md.
+
+name: Apple TV app
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      allow_other_branch:
+        description: 'Refuse unless this is yes: build a ref other than main'
+        required: false
+        default: 'no'
+
+jobs:
+  build-and-stage:
+    runs-on: mac-appletv
+    # The deploy branch is defined here, and the installed copy of ci-config.sh
+    # only falls back to its own default when this is unset. The workflow is the
+    # thing that knows which branch it is running for; a Mac still carrying the
+    # previous deploy branch in ~/Build/nova-appletv-ci/ci-config.sh would
+    # otherwise refuse the first run from a new one, before install-ci.sh (which
+    # runs after the build) has had a chance to refresh it.
+    env:
+      NOVA_ATV_BRANCH: main
+    steps:
+      - name: Check out the commit that triggered this run, then build and stage
+        run: |
+          set -euo pipefail
+          . "$HOME/Build/nova-appletv-ci/ci-config.sh"
+
+          ref="${GITHUB_REF_NAME:-$NOVA_ATV_BRANCH}"
+          sha="${GITHUB_SHA:-}"
+          checkout="$NOVA_ATV_CI_HOME/checkout"
+          ssh_cmd='ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15'
+
+          # A manual run may only build another branch when it says so: the ref
+          # becomes the code this job executes, and its build number is stamped
+          # "now", so it would outrank whatever is on the set and be installed.
+          if [ "$ref" != "$NOVA_ATV_BRANCH" ] && [ "${{ inputs.allow_other_branch }}" != "yes" ]; then
+              echo "refusing to build '$ref': automatic runs are $NOVA_ATV_BRANCH only, and"
+              echo "a manual run on another branch must set allow_other_branch=yes on purpose"
+              rm -rf "$checkout"
+              exit 1
+          fi
+
+          # Already superseded? Stop before cloning: the newer commit's own run
+          # will build it, and this Mac has better things to do.
+          if [ -n "$sha" ]; then
+              tip=$(GIT_SSH_COMMAND="$ssh_cmd" git ls-remote "$NOVA_ATV_REPO_URL" "refs/heads/$ref" | awk '{print $1}')
+              if [ -n "$tip" ] && [ "$tip" != "$sha" ]; then
+                  echo "$ref has moved on to $tip; not building $sha (a newer run will)"
+                  rm -rf "$checkout"
+                  exit 0
+              fi
+          fi
+
+          rm -rf "$checkout"
+          GIT_SSH_COMMAND="$ssh_cmd" git clone --quiet --branch "$ref" "$NOVA_ATV_REPO_URL" "$checkout"
+          # The commit this run is for, not the branch tip: what gets built and
+          # staged must be the thing that was pushed.
+          if [ -n "$sha" ]; then
+              git -C "$checkout" checkout --quiet "$sha"
+          fi
+          echo "building $(git -C "$checkout" rev-parse HEAD) of $ref"
+
+          export NOVA_ATV_CHECKOUT_BRANCH="$ref"
+          "$checkout/scripts/ci/build-and-stage.sh" "$checkout"
+
+      - name: Refresh the deployer, then give the deploy one try
+        run: |
+          set -euo pipefail
+          checkout="$HOME/Build/nova-appletv-ci/checkout"
+          if [ ! -d "$checkout/scripts/ci" ]; then
+              echo "nothing was built by this run; leaving the staged build alone"
+              exit 0
+          fi
+          # Copies any changed scripts into place and restarts the deployer only
+          # if it needs the new code and is not mid-install. The runner itself is
+          # never restarted from inside its own job.
+          "$checkout/scripts/ci/install-ci.sh"
+          "$checkout/scripts/ci/deploy-when-awake.sh" --once

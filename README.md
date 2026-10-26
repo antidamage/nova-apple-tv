@@ -1,128 +1,235 @@
 # Nova Apple TV Dashboard
 
-Native tvOS client for the local Nova Home Assistant dashboard.
+The tvOS client for Nova. A native app that presents the dashboard's zones —
+lighting, climate, timers, outside, network — on the TV, driven by the Siri remote, with
+a live exterior camera feed and the shared status orb.
 
-> **Full engineering reference: [`SPEC.md`](SPEC.md).** It scopes the entire app —
-> architecture, source map, API contract, theming, the focus/navigation model,
-> every zone surface, the status-orb subsystem, the camera/background renderers,
-> and the invariants that must not regress. This README is the operator-facing UX
-> contract and build notes.
+> **Full engineering reference: [`SPEC.md`](SPEC.md)** — architecture, source map,
+> API contract, theming, the focus/navigation model, every zone surface, the
+> status-orb subsystem, the camera and background renderers, and the invariants
+> that must not regress. This README is the operator-facing UX contract and build
+> notes.
 
-The Apple TV app is intentionally a thin client. It does not host the dashboard, talk directly to Home Assistant, or keep state while the Apple TV is asleep. It reads the existing Nova dashboard API at the conventional `http://nova.local` mDNS name and sends zone actions back to `/api/zone`. Household-specific fallback addresses stay in private build configuration, never in the repository.
+## Where it fits
 
-## UX Contract
+| Component | Interface |
+|---|---|
+| [Nova HA Dashboard](https://github.com/antidamage/nova-ha-dashboard) | Reads `/api/*` at `http://nova.local`, sends actions to `/api/zone`, consumes `/api/events` and `/api/orb-modules` |
+| Camera host | `GET /api/camera/outside/index.m3u8` and `/status`, or a standalone service via `NovaCameraBaseURL` |
+| [Nova Visualiser](https://github.com/antidamage/nova-visualiser) | Displays its stream; falls back to this app's own Metal engine when unavailable |
 
-The Apple TV UI follows a focus-first tvOS model. Directional swipes move focus predictably, select expands or confirms, and edit controls capture remote input until confirmed or cancelled. The layout should feel like a PS4/PS5-style dashboard: a tight horizontal band of cards that expands vertically only when the active item needs to show more information.
+## What it does
 
-### Zone Structure
+**Zone control.** Lighting presets (ON, CANDLE/DAY, WHITE, OFF), climate
+controls, outside power and network status, laid out as a ribbon of major zones
+that expand in place.
 
-The major ribbon is:
+**Camera.** The Outside zone carries an always-live inline preview of the
+exterior feed. Selecting it opens the standard tvOS full-screen player with
+play/pause, DVR scrub across the rolling window, skip and a LIVE indicator.
 
-```text
-Lighting | Climate | Outside | Network
+**Focus and input handling.** Movement is rate-limited per context, with immediate first input and bounded repeats. Every focusable control
+carries a scroll id and re-centres on focus change, so the focused control is
+always fully on screen.
+
+**Thin-client model.** It does not host the dashboard, talk to Home Assistant
+directly, or keep state while the Apple TV sleeps. It reads the dashboard API at
+`http://nova.local` and sends zone actions back to `/api/zone`.
+
+**Shared rendering.** The status orb is rendered in native Metal from the same
+declarative module documents the web dashboard uses, and the Phonoscope Metal
+engine is the offline fallback for the streamed visualiser.
+
+## Install
+
+On a Mac with Xcode:
+
+```sh
+xcodebuild -project NovaAppleTVDashboard.xcodeproj \
+  -scheme NovaAppleTVDashboard \
+  -configuration Debug -sdk appletvos build
 ```
 
-Lighting expands into:
+The public build defaults to `http://nova.local`. For another hostname or a
+fallback list, supply `NovaDashboardBaseURLs` in a private `Info.plist` selected
+by an ignored local xcconfig. A standalone camera service can be supplied as
+`NovaCameraBaseURL`; without it the app uses the dashboard's same-origin
+`/api/camera` proxy.
 
-```text
-Home | <room zones supplied by the dashboard>
+The app is built, staged and deployed by the CI: a Forgejo Action on the build
+Mac builds every push to the branch the set is built from, and a deployer
+installs the newest staged build as soon as the Apple TV is awake. Agents should
+let that happen rather than deploying by hand — see `docs/CI-APPLETV-CI.md`.
+
+A manual deploy is still available, for putting one specific build on the set:
+
+```powershell
+scripts/deploy-via-build-host.ps1   # takes build Mac, SSH key, device id, team
 ```
 
-`Home` controls every light. Its child zones follow the dashboard's configured
-room order and control their own lights. Outside owns outside on/off, weather,
-and a live exterior camera feed. Climate owns climate devices. Network is a
-major zone, not a Home child.
+Household endpoint overrides belong in the build Mac's private
+`$HOME/.config/nova-apple-tv/deploy.env`, never in source control.
 
-### Focus And Expansion
+When the web dashboard's status-orb built-ins change, re-sync them:
 
-- Cards start as titles only.
-- Select on a collapsed major or sub-zone expands it.
-- Select on an expanded major or sub-zone collapses it.
-- Down from an expanded title enters the first child/control.
-- Up from controls returns to the owning title.
-- Left/right within a row moves one item at a time.
-- Left/right from an expanded title collapses before moving to a sibling.
-- Moving out of an expanded hierarchy may auto-collapse only after focus has actually left that hierarchy.
-- Edge exits require two gestures: the first collapse, the second move away.
-- The control area is a vertical `ScrollView`; every focusable control carries a scroll id (`dashboardFocus(_:equals:)`) and `ScrollViewReader.scrollTo(focus, anchor: .center)` runs on every focus change. This guarantees the focused control is always fully on screen while travelling through a surface — e.g. swiping down from the air conditioner into the panel heater scrolls the heater into view rather than focusing it off-screen.
+```sh
+node --experimental-strip-types scripts/sync-orb-builtins.mjs
+```
 
-### Remote Movement Tuning
+## UX contract
 
-- Normal navigation accepts one move every `260ms`.
-- Repeated same-direction navigation accepts every `220ms`.
-- Edit controls accept moves every `110ms`.
-- Opposite-direction flicks inside `100ms` are ignored to reduce accidental bounce.
-- Focus should never collapse a parent merely because focus moved to a child/control inside that parent.
+The landscape composition follows Nova Classic on the web: a pinned status orb,
+clock column, Quick Access, then independently expanded Home and Systems groups.
+Each group joins its vertical title (a label, always open) with its zone menu and
+selected controls in one panel. The zone choices persist locally. Advanced panels are omitted; `AdvancedFold` remains a
+supported opt-in component.
 
-### Lighting Controls
+### Remote and rotary controls
 
-- Lighting zones currently expose only the preset action row: ON, CANDLE/DAY, WHITE, OFF.
-- The colour selector (hue grid) and intensity (brightness) slider are intentionally removed pending a rework — they never worked reliably. `RemoteHueGrid` / `RemoteLinearSlider` remain defined but unused, and `lightingFocusRows` no longer emits `.hue`/`.brightness` rows. Restore them here when the feature is reworked.
+The remote's feel is learned, not configured. The app keeps the reach of each
+swipe it sees (the last 200, on the device, in its own storage) and works out the
+person's range from them with the outliers clipped: the lower two thirds of the
+range moves one item and the top third moves two. The behaviour is in
+`specs/remote-swipe.md`.
 
-### Outside Camera
+The band reads the remote's touch surface itself and owns focus: it is hosted in a
+container that refuses any focus update the TV's focus engine makes on its own, so
+a swipe moves focus once, where the band's map says. The highlight the household
+sees and the control Select activates are the same control.
 
-- The Outside zone shows an always-live inline preview of the exterior S-Video capture (ambient feed for the wall display), played through a bare `AVPlayerLayer` (`CameraFeedView.swift`), muted, self-healing on stalls/failures.
-- Source is the dashboard host's rolling-window HLS playlist at `GET /api/camera/outside/index.m3u8`; `GET /api/camera/outside/status` drives the LIVE/OFFLINE chrome and the source label (LIVE FEED vs PLACEHOLDER when the host is serving the synthetic clock).
-- The camera is a **focusable tile** in the Outside focus graph (its own row, `.action(zone.id, "camera-outside")`, below the outside-power button), so you swipe down past the passive weather panel to reach it. The inline preview is height-capped (250pt) so the whole tile is fully revealed by scroll-to-focus when focused.
-- **Select opens the canonical tvOS full-screen player** (`CameraFullScreenPlayer` → `AVPlayerViewController`) with native play/pause, DVR scrub across the rolling window, skip, and a LIVE indicator — the platform's own transport, driven by the Siri remote. The inline preview is deliberately a bare layer (not AVKit's `VideoPlayer`) so its transport controls never fight the dashboard's custom focus model; full transport lives in the full-screen player instead.
-- The full-screen player is hosted by the **root** view and its presented camera id lives on `DashboardStore.fullScreenCameraID` — not on the tile — because presenting the cover sends the dashboard's `@FocusState` to `nil`, and the focus-left-the-zone logic would otherwise collapse the Outside zone, unmount the tile, and dismiss the cover the instant it opened. Two guards make this bulletproof: `collapseIfFocusLeftExpandedArea` ignores a `nil` focus (transient modal focus loss), and `handleExit` dismisses only the player (clearing `fullScreenCameraID`) when it is up, so Menu/Back never falls through to collapse the underlying zone.
+Select unlocks a dial and holds the swipe target on it. While it is unlocked
+every directional press is that dial's own step — left/right walks the dial's
+steps (the ring sliders first, outermost inward, then the mode lights left to
+right) and up/down adjusts the step you are on — and focus cannot leave the dial,
+by the band's navigation or by the engine's geometry. Both ends hold, so neither
+the outermost ring nor the last mode wraps or steps out of the dial. The unlock
+is a lease: a second Select applies the draft, and so does five seconds with no
+input, and Back discards it. Unmounting and app suspension discard a draft. Only
+changed channels are sent, so polling and returning to the app never write stale
+values.
 
-### Modal Editing
+- Colour: hue, brightness and saturation. Hue wraps; the other channels clamp.
+  Colour is disabled when all lights are off; brightness can bring them back.
+- Temperature: target, Auto/Manual/Off (heater Auto/Off), supported HVAC modes,
+  fan, fresh air and sleep timer. Rings that do not apply fold away. The bedroom
+  dial uses the server thermostat, not the old panel-heater entity.
+- Timer: configured icon types, shared countdown, duration ring, silent Off
+  cancellation and server-side completion. Duration steps follow the current
+  web control: five seconds below a minute, ten seconds below five minutes,
+  thirty seconds below ten minutes, then progressively coarser minutes.
 
-- Temperature controls follow the web dashboard: visible minus/plus controls, current/target readouts, and immediate stepper actions. Do not replace these with a generic slider unless the web dashboard changes first.
-- Fan speed uses a dot-line style control matching the web dashboard concept; while editing, swipes adjust the selected step and select commits.
+The status orb is always reachable by navigating left. Select dismisses the
+displayed timer/wash/reminder alert globally, or unlocks stack browsing, which
+holds the swipe target the same way a dial does. Directional inputs step the
+stack; Select, Back, or five seconds with no input returns it to priority order.
+The orb never starts push-to-talk.
 
-### Visual Rules
+### Verification
 
-- Shared dashboard theme is the only color source.
-- The UI is mostly black/dark grey and monotone aside from theme accent and highlight colors.
-- Do not add new ad hoc colors.
-- Do not allow default white tvOS focus boxes/rings anywhere in the app.
-- Focused controls use the shared highlight fill/outline.
-- Expanded or active controls use the shared accent fill/outline.
-- Idle controls use the shared border color.
-- The Nova activity/avatar widget remains top-center. Its arcs circle the avatar, smoothly change direction, and size from load.
-- The status orb's draw stack is module-driven and rendered by native Metal (`MetalOrbView.swift` + `OrbShader.metal`). It interprets the declarative status-orb documents shared with the web dashboard, including module settings, turbulent rings, all four blend modes, liquid-glass theme controls and the voice-glow colour slot. `NovaAvatarOrb` fetches `GET /api/orb-modules` from the dashboard host (5-minute poll), ships the same built-ins (`classic`, `reactor`, `halo`, `cross`) as offline fallbacks, and resolves the shared theme's `avatar.orbModule` with classic as the universal fallback. Run `node --experimental-strip-types scripts/sync-orb-builtins.mjs` when the web built-ins change.
-- `VoiceSpeechStore` consumes the dashboard's `/api/events` stream. Speech start/end events centre and enlarge the orb and drive its alert layers with the same consonant envelope used by the browser dashboards.
-- The resting clock uses the shared clock colour slots and the dashboard layout: local time with seconds and meridiem, a location chip derived from the Apple TV time zone, an ordinal long date, and a Monday-to-Sunday strip highlighting the current day.
+Debug startup runs shared orb ordering/format conformance and
+`LandscapeSelfTests` (swipe engine, focus neighbours, timer steps, clamp/wrap,
+task query shaping and reminder acknowledgement).
+`LandscapeUITests` exercises actual tvOS focus and Select/Back handling, captures
+screenshots, and cancels previews without issuing household control commands.
 
-### Climate Parity
+Run on a tvOS simulator with `xcodebuild test -scheme LandscapeUITests
+-destination 'platform=tvOS Simulator,name=<simulator>' CODE_SIGNING_ALLOWED=NO`. Grant
+the simulator's media-library access first (`xcrun simctl privacy <simulator>
+grant media-library nz.co.skull.NovaAppleTVDashboard`): opening the visualiser
+otherwise raises the Apple Music permission prompt, which takes focus from every
+later launch until it is answered.
+The vendored SRT archive has no usable Intel simulator API: on that simulator
+only, the transport reports unavailable and the existing local visualiser
+fallback remains available. Device and Apple Silicon transport is unchanged.
 
-Match the web dashboard controls in `nova-ha-dashboard/app/components/dashboard/ClimateControls.tsx`:
+### Outside camera
 
-- Air conditioner power states: Auto, Manual, Off.
-- Modes: Heating, Cooling, Fan.
-- Fresh air switch: Recirculate/Fresh.
-- Temperature stepper: target readout, current readout, minus, plus.
-- Fan speed: Quiet through Turbo dot-line selection.
-- Panel heater: power plus temperature stepper.
+- The inline preview plays through a bare `AVPlayerLayer` (`CameraFeedView.swift`),
+  muted, self-healing on stalls and failures. Source is the dashboard host's
+  rolling-window HLS playlist at `GET /api/camera/outside/index.m3u8`;
+  `GET /api/camera/outside/status` drives the LIVE/OFFLINE chrome and the source
+  label (LIVE FEED vs PLACEHOLDER when the host serves the synthetic clock).
+- The camera is a **focusable tile** in the Outside focus graph — its own row,
+  `.action(zone.id, "camera-outside")`, below the outside-power button — so you
+  swipe down past the passive weather panel to reach it. The preview is height-capped
+  at 250 pt so scroll-to-focus reveals the whole tile.
+- The inline preview is deliberately a bare layer rather than AVKit's
+  `VideoPlayer`, so its transport controls never fight the custom focus model.
+  Full transport lives in the full-screen player instead.
+- The full-screen player is hosted by the **root** view and its presented camera
+  id lives on `DashboardStore.fullScreenCameraID`, not on the tile. Presenting
+  the cover sends the dashboard's `@FocusState` to `nil`, and the
+  focus-left-the-zone logic would otherwise collapse the Outside zone, unmount
+  the tile and dismiss the cover the instant it opened. Two guards keep this
+  safe: `collapseIfFocusLeftExpandedArea` ignores a `nil` focus, and `handleExit`
+  dismisses only the player when it is up, so Menu/Back never falls through to
+  collapse the underlying zone.
 
-Prefer copying the web dashboard's command semantics and remembered preference behavior before inventing new climate behaviors.
+### Modal editing
+
+- Temperature controls follow the web dashboard: visible minus/plus controls,
+  current and target readouts, immediate stepper actions. Do not replace these
+  with a generic slider unless the web dashboard changes first.
+- Fan speed uses a dot-line style control matching the web dashboard concept;
+  while editing, swipes adjust the selected step and select commits.
+
+### Visual rules
+
+- The shared dashboard theme is the only colour source. Do not add ad hoc colours.
+- The UI is mostly black and dark grey, monotone aside from theme accent and
+  highlight colours.
+- No default white tvOS focus boxes or rings anywhere.
+- Focused controls use the shared highlight fill/outline; expanded or active
+  controls use the shared accent fill/outline; idle controls use the shared
+  border colour.
+- The Nova activity/avatar widget stays top-centre. Its arcs circle the avatar,
+  smoothly change direction, and size from load.
+- The theme's per-element treatments are part of that contract and are read from
+  the **selected variant**:
+  - `knobSkin` — the dial faces. Pinned to `dark`/`light` it is honoured exactly
+    (the dashboard's dark theme asks for the pale knob, and vice versa); `auto`
+    follows the theme's own background. The face's readouts and the mode-light
+    wells follow the same skin, since pale ink on a pale face is invisible.
+  - `ledColor` — the dials' mode lights and the orb's lit channel.
+  - `unlockRingColor` — the ring drawn round a dial while it is unlocked.
+- The status orb's draw stack is module-driven and rendered by native Metal
+  (`MetalOrbView.swift` + `OrbShader.metal`). It interprets the declarative
+  status-orb documents shared with the web dashboard — module settings, turbulent
+  rings, all four blend modes, liquid-glass theme controls and the voice-glow
+  colour slot — **including each layer's `enabledWhen` gate**, which is how a
+  module ships the light and dark treatments of one surface and draws exactly
+  one of them. `NovaAvatarOrb` fetches `GET /api/orb-modules` (5-minute poll),
+  ships `classic`, `reactor`, `halo` and `cross` as offline fallbacks, and
+  resolves the theme's `avatar.orbModule` with classic as the universal fallback.
+- `VoiceSpeechStore` consumes `/api/events`. Speech start/end events centre and
+  enlarge the orb and drive its alert layers with the same consonant envelope the
+  browser dashboards use.
+- The resting clock uses the shared clock colour slots and dashboard layout:
+  local time with seconds and meridiem, a location chip from the Apple TV time
+  zone, an ordinal long date, and a Monday-to-Sunday strip highlighting today.
+
+### Climate parity
+
+Match the web dashboard controls in
+`nova-ha-dashboard/app/components/dashboard/ClimateControls.tsx`:
+
+- Air conditioner power states: Auto, Manual, Off
+- Modes: Heating, Cooling, Fan
+- Fresh air switch: Recirculate/Fresh
+- Temperature stepper: target readout, current readout, minus, plus
+- Fan speed: Quiet through Turbo, dot-line selection
+- Panel heater: power plus temperature stepper
+
+Prefer copying the web dashboard's command semantics and remembered-preference
+behaviour before inventing new climate behaviour.
 
 ### Debugging
 
-Interaction logs belong behind `#if DEBUG` and must not appear in the UI. Log accepted/ignored moves, focus nodes, edit entry, confirm, and cancel when tuning remote behavior.
+Interaction logs belong behind `#if DEBUG` and must never appear in the UI. When
+tuning remote behaviour, log accepted and ignored moves, focus nodes, edit entry,
+confirm and cancel.
 
-## Build
+## License
 
-On the Mac with Xcode:
-
-```sh
-xcodebuild -project NovaAppleTVDashboard.xcodeproj -scheme NovaAppleTVDashboard -configuration Debug -sdk appletvos build
-```
-
-The public build defaults to:
-
-```swift
-http://nova.local
-```
-
-For another hostname or fallback list, supply `NovaDashboardBaseURLs` in a private
-Info.plist selected by an ignored local xcconfig. A standalone camera service can
-similarly be supplied as `NovaCameraBaseURL`; without it, the app uses the
-dashboard's same-origin `/api/camera` proxy.
-
-`scripts/deploy-via-build-host.ps1` accepts the build Mac, SSH key, Apple TV
-device id and Apple development team explicitly. Household endpoint overrides
-belong in the build Mac's private `$HOME/.config/nova-apple-tv/deploy.env`, not
-source control.
+Licensed under the GNU General Public License, version 3 only (GPL-3.0-only).
+See [LICENSE](LICENSE).

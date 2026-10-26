@@ -17,7 +17,9 @@ The Apple TV app is intentionally a **thin client**. It:
 
 - reads the existing Nova dashboard HTTP API and renders it,
 - sends zone/entity commands back to that same API,
-- holds **no** persistent state and does nothing while the Apple TV sleeps.
+- holds **no** persistent household state (only per-device preferences: the
+  theme override, the host, list selections) and does nothing while the Apple
+  TV sleeps.
 
 It explicitly does **not**:
 
@@ -39,6 +41,9 @@ first.
 - Bundle id: `nz.co.skull.NovaAppleTVDashboard`, display name "Nova TV".
 - Single landscape scene; no multi-scene support.
 - Renders as an always-on Apple TV display.
+- A second target, `NovaTouch` (iPhone, iOS 18.0+, `nz.co.skull.NovaTouch`,
+  display name "Nova"), builds the same sources as a touch app. What differs on
+  the phone, and why, is `specs/ios-touch-app.md`.
 
 ---
 
@@ -46,6 +51,9 @@ first.
 
 `AppConfig` is the bootstrap resolver for network endpoints.
 
+- A host set on the device wins: the iOS Settings app, or the HOST button
+  (`HostSettings`, `specs/host-settings.md`). When one is set it is the only
+  host tried.
 - Public default: `http://nova.local`
 - Optional private override: `NovaDashboardBaseURLs` in an installer-supplied
   Info.plist
@@ -70,7 +78,7 @@ Two `@MainActor` observable stores are created once by the app entry point
 | Store | Responsibility | Poll cadence |
 |---|---|---|
 | `DashboardStore` | dashboard state, theme, layout, orb-module catalog, all command sends, active host, full-screen camera id | `/api/state` every **5s**, `/api/theme` after each state fetch, `/api/orb-modules` every **5 min** |
-| `NovaActivityStore` | the `/api/nova-load` signal that animates the orb | every **2s** |
+| `NovaActivityStore` | the `/api/nova-load` signal that animates the orb, plus the `/api/power` and `/api/tasks` feeds the status orb readouts need | load every **2s**; the extra feeds every **30s**, and only while a readout that needs them is selected |
 
 Each store runs its polling loops in detached `Task`s started from `.task` on the
 root view. Polling is best-effort: a failed cosmetic fetch (theme, orb modules,
@@ -105,13 +113,16 @@ each surface can be read in isolation; reusable chrome is centralized.
 | `DashboardStore.swift` | `DashboardStore`, `NovaActivityStore`, the theme model (`DashboardTheme`, `ThemeRGB`, shared-theme decoding/resolution), `ZoneAction`, `EntityCommand`, `DashboardError`. |
 | `Spectrum.swift` | Colour math: HSL↔RGB, spectrum-position colour, candlelight/white presets, `clamped`. |
 | `Formatting.swift` | Display formatters (temperature, percent, wind, local clock/date/day, …). |
-| `DashboardFocus.swift` | The focus identity (`DashboardFocus`), remote-input gating (`RemoteMoveGate`, edit events), and the focus **graph** that drives navigation. |
+| `DashboardFocus.swift` | The focus identity (`DashboardFocus`), edit events, and the focus **graph** that drives navigation. |
 | `DashboardComponents.swift` | Reusable UI kit: fonts, `CutCornerShape`, control chrome, the focus/tap modifiers, `PanelFrame`, `ReadoutTile`, `EmptyStatePanel`, `ControlButton`, `IconControlButton`, `RibbonTitleButton`, `VerticalToggleSwitch`. |
 | `TVDashboardView.swift` | Root view: the band layout, remote command handling, the primary zone ribbon, clock header, footer, loading state. |
 | `LightingControlsView.swift` | Home→room ribbon, per-zone preset+brightness panel, vertical brightness slider. |
 | `ClimateControlsView.swift` | Air conditioner + panel heater surfaces and all climate command logic. |
 | `OutsideView.swift` | Outside zone (light toggle, camera tile, weather) + the passive weather/network status panels. |
-| `NovaAvatarOrb.swift` | The orb view (surface, load shaping, gym overlay, speaking migration) — delegates drawing to Metal. |
+| `NovaAvatarOrb.swift` | The orb view (surface, load shaping, readout overlay, speaking migration) — delegates drawing to Metal. |
+| `OrbInfo.swift` | Status orb **info module** contract + `formatOrbValue` — a port of the dashboard's `lib/orb-info/`. |
+| `OrbInfoModules.swift` | The tvOS module catalogue (gym, host load, clock, sky, household) and display resolution. |
+| `OrbInfoConformanceCases.swift` | GENERATED. The shared formatter case table; regenerate via `scripts/generate-orb-info-cases.mjs`. |
 | `OrbModules.swift` | Status-orb module **model** (decoding, settings, layers, geometry), validation, palette, and animation state. |
 | `OrbBuiltins.swift` | The embedded built-in module JSON + `OrbModuleCatalog` (offline catalog + fallback rule). |
 | `MetalOrbView.swift` | Native Metal status-orb renderer and module-command encoder. |
@@ -141,6 +152,8 @@ All paths are relative to a host base URL.
 | GET | `/api/theme` | Shared theme payload (variants + top-level `layout`). |
 | GET | `/api/orb-modules` | Status-orb module catalog (merged host built-ins + dropped modules). |
 | GET | `/api/nova-load` | Activity signal (cpu/net/gpu/load + listening flag). |
+| GET | `/api/power` | Live household watts + cost rate, for the power status orb readouts. |
+| GET | `/api/tasks?command=list` | Reminder list, for the next-reminder / overdue readouts. |
 | GET | `/api/camera/<id>/index.m3u8` | Rolling-window HLS playlist for a camera. |
 | GET | `/api/camera/<id>/status` | Camera source/recording/connection state. |
 | POST | `/api/zone` | Group/zone lighting action (on/off/brightness/color/candlelight/white). |
@@ -219,6 +232,14 @@ the **`orbModule`** id selecting which status-orb module renders (see §11).
 
 ## 8. Layout and visual system
 
+The current composition is a fixed left orb plus horizontally scrolling clock,
+Quick Access, Home and Systems columns. The latter are joined title/menu/control
+groups and can both stay open. Their full-size colour and climate dials reuse
+the same wrappers as Quick Access. Reminders supplies the shared timer dial.
+The paragraph and source map below describe the reusable legacy chrome; current
+layout ownership is LandscapeDashboard.swift and navigation is section 9.
+
+
 The whole UI is one fixed-height **horizontal band**, vertically centred, with
 ambient background above and below. Left→right:
 
@@ -260,122 +281,57 @@ ambient background above and below. Left→right:
 
 ## 9. Focus and navigation model
 
-The app does **not** use the system focus engine for movement. It owns focus via
-`@FocusState<DashboardFocus?>` and an explicit, transposed **focus graph**.
+The live home-control surface is `LandscapeDashboard`. `TVDashboardView`
+owns only the ambient background, camera cover and Phonoscope lifecycle.
 
-> **Why stickiness lives in `onChange(of: focus)`, not `onMoveCommand`.** Every
-> control is `.focusable(true)`, so for a swipe between two *adjacent* focusable
-> controls the tvOS **focus engine moves focus itself** and consumes the input —
-> the root `onMoveCommand` only fires at the edges of the focusable layout (and
-> before a level is expanded). That means the sticky boundaries can't be enforced
-> by gating `onMoveCommand`; they're enforced by watching the resulting focus
-> *change*: a disallowed crossing is **reverted** (`focus = oldFocus`) until the
-> boundary's charge is met, and the focused control plays the rubber-band nudge.
-> (Making controls focusable only while focused does NOT work — a control can't
-> gain focus if it's only focusable once focused, a deadlock that kills all input.)
+`BandMap` gives every visible control its place in the band: a panel, a column
+inside it, a block (a row of controls) inside the column, and a slot in the row.
+A swipe moves to the neighbour a person would pick by eye: along a row, down to
+the next block, and off the end of a row to the next column or panel. A long swipe
+switches panel. The rules, with the picture, are in `specs/band-navigation.md`.
+The Home and Systems titles are labels: both groups are always open. Selection
+remains independent between Home and Systems. The Phonoscope
+button is a row of the Systems list, under Reminders (Adeline, 2026-09-20), rather
+than a control at the right end of the band.
 
-### Focus identity
+The band's navigation owns focus. The band is hosted in a container that
+refuses any focus update the TV's focus engine makes on its own (one that carries
+a heading), and the remote's touch surface is read directly, so a swipe moves
+focus once, where the band's map says. The highlight and the control Select
+activates are therefore the same control, and a step always travels from the
+control the last step left focus on.
 
-`DashboardFocus` enumerates every focusable element: `.section` (primary zone
-title), `.child` (Home room title), `.action(zoneID, id)` (a button/tile),
-`.brightness`, `.temperature`, `.fanSpeed`, and the parked `.hue`. Each value is
-also the scroll id used by scroll-to-focus.
+How a swipe becomes steps is `specs/remote-swipe.md`: the travel a first and each
+further step needs, a shorter first step for swipes in a row, extra travel to
+cross into another group, a short coast after a fast flick, and a lean on the
+focused control. The distances are learned from the person's own swipes, not
+configured: the app keeps the reach of the last 200 swipes on the device
+(`SwipeRangeStore`), clips the outliers, and reads the lower two thirds of what is
+left as one movement and the top third as two. A clickpad edge press steps once and
+repeats while held.
 
-### The graph (`dashboardFocusGraph`)
+Select unlocks `RotaryEncoder` and holds the swipe target on it: while unlocked
+**every** directional press is that dial's own step — left/right walks
+`RotaryStepOrder` (the ring sliders first, outermost inward, then the face
+channels in drawing order, both ends holding), up/down steps the selected
+channel's draft — and focus cannot leave the dial, by the band's navigation or by
+the focus engine's geometry. The unlock is a lease, not a mode: it ends on a
+second Select (commit), on no input for the lease — five seconds
+(`UITestHarness.dialIdleCommit`) — which commits, or on Back, which discards.
+Select commits only changed values; unmounting and scene suspension discard the
+draft. The command boundary is the server API; the committed face reflects server
+state and failures appear in the footer. The orb uses the same indicator without
+LEDs, captures edit moves, holds its target the same way, dismisses a displayed
+event before entering browsing, and returns to priority order when locked —
+which its own idle lease also does now.
 
-Built for the current expansion as **rows of siblings**. Critically, the graph is
-*transposed* relative to the screen:
+Home/System selections and group open state use per-device AppStorage.
+`AdvancedFold` supports explicit opt-in presentation, focus and expansion;
+the standard Apple TV layout does not instantiate advanced content.
 
-- The outer index (row) is a **depth level**, laid out **left→right** on screen.
-- Items within a level are **siblings**, stacked **top→bottom**.
-
-So the remote maps to:
-
-- **up/down** → move between siblings in the current level,
-- **right** → go deeper (expand the focused title like Select, or step to the
-  next control column),
-- **left** → go shallower (return to the owning title, or — at the left edge of a
-  control group — behave like Back).
-
-Any branch that has controls **must** contribute its control rows to the graph,
-or focus on those controls has no position and navigation collapses to the first
-zone button.
-
-### Expansion and collapse
-
-- Select on a collapsed title expands it and moves focus to its first control.
-- Select on an expanded title collapses it.
-- Moving focus out of an expanded hierarchy auto-collapses it — but only once
-  focus has **genuinely** left (`collapseIfFocusLeftExpandedArea` ignores a `nil`
-  focus, which is a transient modal focus loss).
-- Menu/Back (`handleExit`) consumes exactly one level per press: dismiss camera →
-  cancel edit → then `collapseOneLevel` (collapse child → collapse zone → step to
-  owner). Edge exits therefore always take a deliberate second gesture, and the
-  button path is instant. Reversing out by **swipe** is additionally sticky — see
-  *Sticky boundaries* below.
-
-### Live swipe tuning (`SwipeSettings`)
-
-The remote feel below is **not hard-coded** — it is driven by `SwipeSettings`
-(`DashboardStore.swift`), polled live off the `/api/theme` envelope's
-`layout.swipe` block and edited from the dashboard's **Apple TV Expert Settings**
-section (server side: `lib/appletv-swipe.ts` owns the defaults/ranges, surfaced
-by `app/api/theme` and written via `app/api/layout`). Defaults match the values
-quoted here; the gates read the live struct so changes apply without a rebuild.
-
-### Remote tuning (`RemoteMoveGate`)
-
-- Navigation accepts one move every `moveInterval` (default **220ms**; the
-  reverse-direction interval is `moveInterval × 1.18`, ~**260ms**).
-- Edit moves accept every **50ms** so sliders track a continuous swipe (fixed).
-- Opposite-direction "flicks" within **100ms** are dropped (anti-bounce, fixed).
-- A short **detachment dwell** (`detachDwell`, default ~80ms) prevents a control
-  being abandoned on the first frame of a swipe.
-
-### Sticky boundaries (`StickyBoundaryGate`)
-
-Some transitions resist an accidental swipe: crossing them needs **several
-accepted moves in a row** (vs one for an ordinary move), so a stray diagonal
-flick can't cascade out of a menu or jump between devices. Charge accumulates
-only while the same element pushes the same way against the same boundary, and
-resets on any other move, a `resetInterval` rest (default ~500ms), or a
-successful crossing.
-
-- **Hierarchy** — reversing one level *out* by **swipe** (left at a control edge,
-  or a room title back to the ribbon): `hierarchyCharge` moves to cross (default
-  **4**). The physical **Menu/Back button is never gated** (`handleExit` →
-  `collapseOneLevel`); it is always an instant, deliberate one-level exit. Only
-  the fuzzy trackpad swipe is sticky.
-- **Component group** — switching device groups inside the final level (e.g. the
-  air conditioner ↔ the panel heater, classified by `controlGroupID`):
-  `componentGroupCharge` moves to cross (default **3**). Moving control-to-control
-  inside one device is immediate.
-- While a boundary holds, the **focused control itself** plays a brief rubber-band
-  **nudge** (`SwipeNudge`, delivered through the `\.swipeNudge` environment to the
-  control via `dashboardFocus`) — it leans `nudgeDistance` points (default **14**,
-  growing with charge progress) toward where it would go, then springs back, so
-  the resistance previews the break-free direction rather than reading as a dead
-  remote. Setting `nudgeDistance` to 0 disables the hint.
-
-Per-level: `up/down` (siblings) never crosses a boundary; drilling **in** (right
-on a title) is never sticky — only reversing out and crossing device groups are.
-
-### Edit handshake
-
-Edit-capable controls (brightness, temperature stepper-as-edit, fan speed, parked
-hue/linear) follow one pattern: Select enters edit mode and claims `editingFocus`;
-the root view forwards serialized `editMove`/`editCancel` events; the control
-keeps a local `draft`, steps it on `editMove`, applies on Select, and discards on
-`editCancel` (Menu). Serial + focus tagging let a control ignore stale/foreign
-events.
-
-### Debugging
-
-`debugInteractionLog` traces accepted/ignored moves, focus transitions, and edit
-enter/confirm/cancel — compiled out of release builds. Interaction logging must
-never surface in the UI.
-
----
+Native regression coverage lives in `LandscapeSelfTests.swift` and
+`UITests/LandscapeNavigationTests.swift`. Existing shared orb conformance
+tests remain part of Debug startup.
 
 ## 10. Zones
 
@@ -485,7 +441,7 @@ Speech events use the same pulse path. `VoiceSpeechStore` listens to
 `/api/events`, reconstructs the server's audible start time and consonant timing,
 then supplies the same envelope used by the dashboards. While speaking, the orb
 migrates to the screen centre, enlarges with a higher-resolution drawable, hides
-the gym counter, and returns after the end event.
+the readout, and returns after the end event.
 
 ---
 
@@ -537,15 +493,47 @@ A Metal-rendered animated field that mirrors the web dashboard's background.
 
 ---
 
-## 14. Accessibility
+## 14. Phonoscope beat synchronisation
+
+- Track resolution returns Nova's complete cached `beatTimes` timeline at song
+  start. The Apple TV aligns that timeline to `SystemMusicPlayer.playbackTime`;
+  it does not call ReccoBeats or synthesize its own independent clock.
+- The local renderer uses the current playback position. House Party separately
+  samples the same timeline 250 ms ahead for local HA lights and 1.10 seconds
+  ahead for cloud-backed Tuya lights, compensating for their different command
+  paths without advancing the on-screen visualiser.
+- When a cached timeline is unavailable, the client retains the BPM/offset
+  fallback so playback and controls remain usable offline.
+- The Apple TV is the distributed playback-clock master. Every House Party
+  frame can carry its current track and playback observation; Nova extrapolates
+  that state for polling clients. Track changes, play/pause changes, resets, and
+  seeks of at least 650 ms bypass normal frame suppression and publish
+  immediately instead of waiting for the periodic keepalive.
+- Swiping up reveals the House Party action bar. It stays visually subordinate
+  to the visualiser with an identical dark-charcoal focused and unfocused
+  surface, a 75% grey label, and no tvOS focus effect. The bar dismisses as soon
+  as its action loses focus.
+- Swiping down reveals a three-button theme transport at the top of the
+  visualiser. Prev group and next group step sideways to the adjacent colour
+  theme group and land on its first entry, playing the transition the departing
+  entry authored; the group's own sequence keeps rotating. Pause freezes the
+  current interpolated frame and resume continues from that exact frame — the
+  transport's only hold. Stepping groups while paused stays paused. The
+  transport uses a charcoal panel
+  and charcoal focused control with the dashboard highlight colour as its focus
+  outline, and dismisses when none of its buttons retains focus.
+
+---
+
+## 15. Accessibility
 
 - Interactive controls carry `.isButton`; the orb and camera expose descriptive
-  labels (gym hours, camera live/offline).
+  labels (the status orb readout, camera live/offline).
 - Passive panels are focusable for navigation but are not labelled as buttons.
 
 ---
 
-## 15. Build and deploy
+## 16. Build and deploy
 
 The project can be edited on any host; tvOS compilation and signing happen on a
 Mac with Xcode.
@@ -556,22 +544,30 @@ Mac with Xcode.
     -configuration Debug -destination 'generic/platform=tvOS Simulator' \
     -derivedDataPath ./DerivedDataSim CODE_SIGNING_ALLOWED=NO build
   ```
-- Full build + install + launch: `scripts/deploy-via-build-host.ps1`. It requires
-  the build Mac, Apple TV device id and development team as arguments, packages
-  the project, runs the simulator compile check, performs a signed build through
-  the Mac's GUI Terminal, propagates that build's exit status, installs, launches
-  and verifies the process. Household endpoint overrides can be loaded from the
-  Mac's private `$HOME/.config/nova-apple-tv/deploy.env`.
+- Full build + install + launch is the **CI's job**: push to `main` and a
+  Forgejo Action on the build Mac builds
+  the merged commit, stages the signed app, and a deployer installs it the next
+  time the set is awake (`docs/CI-APPLETV-CI.md`). Agents should not deploy by
+  hand. For putting one specific build on the set, `scripts/deploy-via-build-host.ps1`
+  still does the whole chain: it requires the build Mac, Apple TV device id and
+  development team as arguments, packages the project, runs the simulator compile
+  check, performs a signed build through the Mac's GUI Terminal, propagates that
+  build's exit status, installs, launches and verifies the process. Household
+  endpoint overrides can be loaded from the Mac's private
+  `$HOME/.config/nova-apple-tv/deploy.env`.
 - The Xcode project uses **explicit** file references (not synchronized groups):
   a new source file must be added to `project.pbxproj` in four places
   (`PBXBuildFile`, `PBXFileReference`, the `NovaAppleTVDashboard` `PBXGroup`, and
   the `Sources` `PBXSourcesBuildPhase`) or it will not compile.
-- **Sleep blocker**: a sleeping Apple TV refuses foreground launch; install
-  succeeds but visual verification needs someone to physically wake the TV.
+- **Sleep blocker**: a sleeping Apple TV refuses foreground launch - the install
+  succeeds but the app does not come up until the set is awake. The CI deployer is
+  built around this: it waits for the set to be switched on and never wakes it.
+  A manual deploy still meets it, and waking the set to force a deploy is not the
+  way through.
 
 ---
 
-## 16. Invariants — do not regress
+## 17. Invariants — do not regress
 
 1. **Behaviour parity**: never change user-facing UX or the HA command/`remember`
    shapes unless the web client changes first.
@@ -589,7 +585,7 @@ Mac with Xcode.
 
 ---
 
-## 17. Parked / future work
+## 18. Parked / future work
 
 - **Colour (hue grid) + horizontal brightness** controls live in
   `ParkedControls.swift`, currently unwired. Rework needs a remote-friendly
