@@ -36,7 +36,7 @@ plist_dir=$HOME/Library/LaunchAgents
 runner_dir=$NOVA_ATV_CI_HOME/runner
 runner_cfg=$runner_dir/config.yaml
 runner_bin=${NOVA_ATV_RUNNER_BIN:-/usr/local/bin/forgejo-runner}
-forge_url=${NOVA_ATV_FORGE_URL:-https://forge.example:3300}
+forge_url=${NOVA_ATV_FORGE_URL:-https://ununhexium.example-tailnet.ts.net:3300}
 runner_token_file=${NOVA_ATV_RUNNER_TOKEN_FILE:-$HOME/.config/nova-apple-tv/forgejo-runner-token}
 mkdir -p "$NOVA_ATV_CI_HOME" "$plist_dir"
 

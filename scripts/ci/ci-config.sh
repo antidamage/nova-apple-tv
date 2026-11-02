@@ -12,7 +12,7 @@ NOVA_ATV_BUILD_TREE=${NOVA_ATV_BUILD_TREE:-$HOME/Build/NovaAppleTVDashboard}
 NOVA_ATV_CI_HOME=${NOVA_ATV_CI_HOME:-$HOME/Build/nova-appletv-ci}
 NOVA_ATV_STAGING=${NOVA_ATV_STAGING:-$HOME/Build/nova-appletv-staging}
 NOVA_ATV_DEPLOY_ENV=${NOVA_ATV_DEPLOY_ENV:-$HOME/.config/nova-apple-tv/deploy.env}
-NOVA_ATV_REPO_URL=${NOVA_ATV_REPO_URL:-ssh://git@forge.example:2222/antidamage/nova-appletv-dashboard.git}
+NOVA_ATV_REPO_URL=${NOVA_ATV_REPO_URL:-ssh://git@ununhexium.example-tailnet.ts.net:2222/antidamage/nova-appletv-dashboard.git}
 # The trunk the app is built and deployed from. A work branch is temporary: it
 # exists for one pull request and is deleted when that is merged.
 # The workflow sets this too, so a run is judged against the branch it is for

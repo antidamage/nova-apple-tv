@@ -43,14 +43,14 @@ build number (below), so the set can tell which build it is running.
 
 On Indium:
 
-- build tree `/Users/<build-user>/Build/NovaAppleTVDashboard` (the same tree the
+- build tree `/Users/alex/Build/NovaAppleTVDashboard` (the same tree the
   manual path uses, so `DerivedData` and therefore the incremental build are
   shared)
-- CI home `/Users/<build-user>/Build/nova-appletv-ci` (scripts, the runner, the pyatv
+- CI home `/Users/alex/Build/nova-appletv-ci` (scripts, the runner, the pyatv
   virtualenv, state, logs)
-- staging `/Users/<build-user>/Build/nova-appletv-staging/<build-number>` plus
+- staging `/Users/alex/Build/nova-appletv-staging/<build-number>` plus
   `current.json`, which names the build the deployer should install
-- private configuration `/Users/<build-user>/.config/nova-apple-tv/`: `deploy.env`
+- private configuration `/Users/alex/.config/nova-apple-tv/`: `deploy.env`
   (signing team, camera overrides), `atv-credentials.json` (the set's pyatv
   pairing), `forgejo-runner-token` (one-time registration token, deletable after)
 
@@ -166,7 +166,7 @@ ssh indium-nova-ha-tasks '~/Build/nova-appletv-ci/test-deploy-path.sh'
 # has no GUI session, so Xcode cannot reach the signing keychain without it.
 ssh indium-nova-ha-tasks 'rm -rf /tmp/atv-manual && git clone --quiet --depth 1 \
   --branch main \
-  ssh://git@forge.example:2222/antidamage/nova-appletv-dashboard.git \
+  ssh://git@ununhexium.example-tailnet.ts.net:2222/antidamage/nova-appletv-dashboard.git \
   /tmp/atv-manual && NOVA_ATV_BUILD_VIA_TERMINAL=1 \
   /tmp/atv-manual/scripts/ci/build-and-stage.sh /tmp/atv-manual'
 ```
