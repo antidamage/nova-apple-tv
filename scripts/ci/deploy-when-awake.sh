@@ -216,6 +216,12 @@ if [ "${1:-}" = "--awake-check" ]; then
     exit "$rc"
 fi
 
+# --awake-check above only asks the set's power state; everything from here installs.
+if [ -z "$NOVA_ATV_DEVICE_ID" ]; then
+    nova_atv_log "NOVA_ATV_DEVICE_ID is not set - expected it in $NOVA_ATV_DEPLOY_ENV"
+    exit 1
+fi
+
 if [ "${1:-}" = "--once" ]; then
     cycle
     rc=$?

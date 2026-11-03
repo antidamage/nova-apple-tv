@@ -93,7 +93,7 @@ exit 0
 SH
 chmod +x "$work/bin/xcrun"
 
-echo "NOVA_APPLE_DEVELOPMENT_TEAM=ABCDE12345" > "$NOVA_ATV_DEPLOY_ENV"
+printf '%s\n' "NOVA_APPLE_DEVELOPMENT_TEAM=TESTTEAM00" "NOVA_ATV_DEVICE_ID=TEST-DEVICE" > "$NOVA_ATV_DEPLOY_ENV"
 
 staged_at=$(($(date +%s) - 600)) # older than the settle window, so it is due now
 cat > "$NOVA_ATV_STAGING/current.json" <<JSON
@@ -174,6 +174,18 @@ case "$asleep_out" in
         failures=$((failures + 1))
         ;;
 esac
+
+note "== the deployer refuses to run without a device ID =="
+echo "NOVA_APPLE_DEVELOPMENT_TEAM=TESTTEAM00" > "$NOVA_ATV_DEPLOY_ENV"
+: > "$NOVA_ATV_CI_HOME/xcrun-calls.log"
+"$here/deploy-when-awake.sh" --once >/dev/null 2>&1
+rc=$?
+note "  exit status: $rc"
+[ "$rc" -ne 0 ] || failures=$((failures + 1))
+if [ -s "$NOVA_ATV_CI_HOME/xcrun-calls.log" ]; then
+    note "  FAIL: the device was contacted without a device ID"
+    failures=$((failures + 1))
+fi
 
 if [ "$failures" -eq 0 ]; then
     note "PASS"

@@ -6,13 +6,20 @@
 # household's private values (signing team, camera proxy token, Apple TV pairing
 # credentials) live in ~/.config/nova-apple-tv/ and never in this repository.
 
+NOVA_ATV_CI_ENV=${NOVA_ATV_CI_ENV:-$HOME/.config/nova-apple-tv/ci.env}
+# This install's locations, such as the forge. The file wins over a default.
+if [ -f "$NOVA_ATV_CI_ENV" ]; then
+    . "$NOVA_ATV_CI_ENV"
+fi
+
 NOVA_ATV_BUNDLE_ID=${NOVA_ATV_BUNDLE_ID:-nz.co.skull.NovaAppleTVDashboard}
-NOVA_ATV_DEVICE_ID=${NOVA_ATV_DEVICE_ID:-06ADB44E-EB13-50E7-BC36-01B908606CD5}
+NOVA_ATV_DEVICE_ID=${NOVA_ATV_DEVICE_ID:-}
 NOVA_ATV_BUILD_TREE=${NOVA_ATV_BUILD_TREE:-$HOME/Build/NovaAppleTVDashboard}
 NOVA_ATV_CI_HOME=${NOVA_ATV_CI_HOME:-$HOME/Build/nova-appletv-ci}
 NOVA_ATV_STAGING=${NOVA_ATV_STAGING:-$HOME/Build/nova-appletv-staging}
 NOVA_ATV_DEPLOY_ENV=${NOVA_ATV_DEPLOY_ENV:-$HOME/.config/nova-apple-tv/deploy.env}
-NOVA_ATV_REPO_URL=${NOVA_ATV_REPO_URL:-ssh://git@ununhexium.example-tailnet.ts.net:2222/antidamage/nova-appletv-dashboard.git}
+# No default: an unset repo fails at git rather than reaching someone else's forge.
+NOVA_ATV_REPO_URL=${NOVA_ATV_REPO_URL:-}
 # The trunk the app is built and deployed from. A work branch is temporary: it
 # exists for one pull request and is deleted when that is merged.
 # The workflow sets this too, so a run is judged against the branch it is for
